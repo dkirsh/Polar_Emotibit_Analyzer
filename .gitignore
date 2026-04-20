@@ -1,0 +1,7 @@
+backend/.venv/
+data/samples/chung2026*
+__pycache__/
+*.pyc
+.DS_Store
+backend/.pytest_cache/
+backend/data/

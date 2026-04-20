@@ -1,0 +1,230 @@
+// Typed fetch wrappers for the Polar-EmotiBit Analyzer backend.
+// All routes are proxied through Vite's dev server (/api/* → :8000).
+
+export type FeatureSummary = {
+  rmssd_ms: number;
+  sdnn_ms: number;
+  mean_hr_bpm: number;
+  eda_mean_us: number;
+  eda_phasic_index: number;
+  stress_score: number;
+  rr_source: "native_polar" | "derived_from_bpm";
+  vlf_ms2: number | null;
+  lf_ms2: number | null;
+  hf_ms2: number | null;
+  lf_hf_ratio: number | null;
+};
+
+export type AnalysisResponse = {
+  synchronized_samples: number;
+  drift_slope: number;
+  drift_intercept_ms: number;
+  drift_segments: number;
+  xcorr_offset_ms: number;
+  feature_summary: FeatureSummary;
+  quality_flags: string[];
+  movement_artifact_ratio: number;
+  report_markdown: string;
+  non_diagnostic_notice: string;
+  sync_qc_score: number;
+  sync_qc_band: "green" | "yellow" | "red";
+  sync_qc_gate: "go" | "conditional_go" | "no_go";
+  sync_qc_failure_reasons: string[];
+};
+
+export type ValidateEmotibitResponse = {
+  valid: true;
+  filename: string;
+  n_rows: number;
+  columns_present: string[];
+  has_accelerometer: boolean;
+  has_respiration: boolean;
+  timestamp_range_ms: { min: number; max: number; span_s: number };
+};
+
+export type ValidatePolarResponse = {
+  valid: true;
+  filename: string;
+  n_rows: number;
+  columns_present: string[];
+  has_native_rr: boolean;
+  rr_source: "native_polar" | "derived_from_bpm";
+  rr_source_note: string;
+  timestamp_range_ms: { min: number; max: number; span_s: number };
+};
+
+export type ValidateMarkersResponse = {
+  valid: true;
+  filename: string;
+  n_rows: number;
+  codes_present: string[];
+  unknown_codes: string[];
+  sessions: string[];
+};
+
+export type RecentSession = {
+  session_id: string;
+  subject_id: string;
+  session_date: string;
+  analyzed_at: string;
+  sync_qc_gate: "go" | "conditional_go" | "no_go";
+  sync_qc_score: number;
+};
+
+export type StressDecomposition = {
+  total: number;
+  dominant_driver: string;
+  components: Array<{ name: string; component: number; contribution: number; weight: number }>;
+};
+
+export type WindowedFeatures = {
+  t_s: number[];
+  hr_mean: number[];
+  hr_std: number[];
+  eda_mean: number[];
+  rmssd: number[];
+  stress: number[];
+  hr_contribution: number[];
+  eda_contribution: number[];
+  hrv_contribution: number[];
+};
+
+export type SpectralTrajectory = {
+  t_s: number[];
+  lf_power: Array<number | null>;
+  hf_power: Array<number | null>;
+  lf_hf_ratio: Array<number | null>;
+};
+
+export type PsdData = {
+  frequencies_hz: number[];
+  psd_ms2_hz: number[];
+  rr_source: string;
+  bands: Record<string, { lo: number; hi: number; color: string; label: string }>;
+};
+
+export type DescriptiveStats = {
+  hr_bpm: { mean: number; std: number; min: number; max: number; p05: number; p95: number };
+  eda_us: { mean: number; std: number; min: number; max: number; p05: number; p95: number };
+};
+
+export type InferenceStats = {
+  hr_mean_ci95: { mean: number; lower: number; upper: number };
+  eda_mean_ci95: { mean: number; lower: number; upper: number };
+  hr_change_effect_size_d: number;
+  eda_change_effect_size_d: number;
+  repeated_measures_windows: number;
+  hr_trend_pvalue: number;
+  eda_trend_pvalue: number;
+  hr_trend_pvalue_raw: number;
+  eda_trend_pvalue_raw: number;
+};
+
+export type ExtendedAnalytics = {
+  stress_decomposition: StressDecomposition;
+  windowed: WindowedFeatures;
+  spectral_trajectory: SpectralTrajectory;
+  psd: PsdData;
+  rr_series_ms: number[];
+  descriptive_stats: DescriptiveStats;
+  inference: InferenceStats | null;
+  cleaned_timeseries: Array<{
+    timestamp_ms?: number;
+    hr_bpm?: number;
+    eda_us?: number;
+    acc_x?: number;
+    acc_y?: number;
+    acc_z?: number;
+  }>;
+  motion_artifact_ratio: number;
+};
+
+export type StoredSession = {
+  analysis_id: string;
+  session_id: string;
+  subject_id: string;
+  study_id: string;
+  session_date: string;
+  operator?: string;
+  notes?: string;
+  analyzed_at: string;
+  markers_summary?: { n_rows?: number; codes?: string[]; error?: string } | null;
+  result: AnalysisResponse;
+  extended: ExtendedAnalytics | null;
+};
+
+type ValidateResponse =
+  | ValidateEmotibitResponse
+  | ValidatePolarResponse
+  | ValidateMarkersResponse;
+
+async function postFile<T>(path: string, file: File): Promise<T> {
+  const body = new FormData();
+  body.append("file", file);
+  const r = await fetch(path, { method: "POST", body });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    const reason =
+      typeof err.detail === "string"
+        ? err.detail
+        : err.detail?.reason ?? JSON.stringify(err.detail);
+    throw new Error(reason);
+  }
+  return (await r.json()) as T;
+}
+
+export async function validateEmotibitCsv(file: File) {
+  return postFile<ValidateEmotibitResponse>("/api/v1/validate/csv/emotibit", file);
+}
+export async function validatePolarCsv(file: File) {
+  return postFile<ValidatePolarResponse>("/api/v1/validate/csv/polar", file);
+}
+export async function validateMarkersCsv(file: File) {
+  return postFile<ValidateMarkersResponse>("/api/v1/validate/csv/markers", file);
+}
+
+export type AnalyzePayload = {
+  emotibit_file: File;
+  polar_file: File;
+  markers_file?: File | null;
+  session_id: string;
+  subject_id: string;
+  study_id: string;
+  session_date: string;
+  operator?: string;
+  notes?: string;
+};
+
+export async function analyze(payload: AnalyzePayload): Promise<AnalysisResponse> {
+  const body = new FormData();
+  body.append("emotibit_file", payload.emotibit_file);
+  body.append("polar_file", payload.polar_file);
+  if (payload.markers_file) body.append("markers_file", payload.markers_file);
+  body.append("session_id", payload.session_id);
+  body.append("subject_id", payload.subject_id);
+  body.append("study_id", payload.study_id);
+  body.append("session_date", payload.session_date);
+  if (payload.operator) body.append("operator", payload.operator);
+  if (payload.notes) body.append("notes", payload.notes);
+  const r = await fetch("/api/v1/analyze", { method: "POST", body });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+  }
+  return (await r.json()) as AnalysisResponse;
+}
+
+export async function listRecentSessions(limit = 10): Promise<RecentSession[]> {
+  const r = await fetch(`/api/v1/sessions?limit=${limit}`);
+  if (!r.ok) return [];
+  return (await r.json()) as RecentSession[];
+}
+
+export async function getSession(sessionId: string): Promise<StoredSession> {
+  const r = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`);
+  if (!r.ok) throw new Error(`Session ${sessionId} not found`);
+  return (await r.json()) as StoredSession;
+}
+
+// Re-export to avoid unused-import warnings when consumers only need one.
+export type { ValidateResponse };

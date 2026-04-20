@@ -1,0 +1,261 @@
+/* Polar-EmotiBit Analyzer — global styles.
+   Dark background with high-contrast teal accents; accessible contrast ratios.
+   No dark-blue-on-dark (per DK's WCAG rule). */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
+body {
+  background: #121212;
+  color: #E8E8E8;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  line-height: 1.55;
+  font-size: 15px;
+}
+
+a { color: #00C896; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.topbar {
+  background: #1C3D3A;
+  color: #E6F5F0;
+  padding: 14px 28px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #0E2623;
+}
+.topbar h1 {
+  font-family: Georgia, serif;
+  font-size: 1.2rem;
+  color: #fff;
+  font-weight: 400;
+}
+.topbar .topbar-nav a {
+  margin-left: 18px;
+  color: #00C896;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.page { padding: 28px; max-width: 1200px; margin: 0 auto; }
+
+/* ─── View 1 — New Analysis Session ─── */
+.va-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 820px) { .va-grid { grid-template-columns: 1fr; } }
+
+.card {
+  background: #1E1E1E;
+  border: 1px solid #2F2F2F;
+  border-radius: 10px;
+  padding: 20px 22px;
+}
+.card h2 {
+  font-family: Georgia, serif;
+  font-size: 1.05rem;
+  color: #00C896;
+  margin-bottom: 14px;
+}
+
+.field { display: flex; flex-direction: column; margin-bottom: 14px; }
+.field label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #B8B8B8;
+  margin-bottom: 6px;
+}
+.field label .req { color: #E8872A; margin-left: 3px; }
+.field input, .field textarea, .field select {
+  background: #141414;
+  color: #fff;
+  border: 1px solid #3A3A3A;
+  border-radius: 5px;
+  padding: 8px 10px;
+  font: inherit;
+}
+.field input:focus, .field textarea:focus, .field select:focus {
+  outline: 2px solid #00C896;
+  outline-offset: 1px;
+}
+
+.dropzone {
+  border: 2px dashed #3A3A3A;
+  background: #141414;
+  border-radius: 8px;
+  padding: 22px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone.drag { border-color: #00C896; background: #0F2A24; }
+.dropzone.valid { border-color: #1A7050; background: #0E251C; }
+.dropzone.invalid { border-color: #D15A73; background: #2A1319; }
+.dropzone h4 { color: #E8E8E8; margin-bottom: 6px; }
+.dropzone .filename { color: #00C896; font-weight: 600; margin-top: 6px; }
+.dropzone .validation-detail {
+  font-size: 0.82rem;
+  color: #B8B8B8;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2A2A2A;
+  text-align: left;
+}
+.dropzone .validation-detail.error { color: #F5A0B0; }
+
+.submit-btn {
+  width: 100%;
+  background: #00C896;
+  color: #000;
+  border: none;
+  padding: 13px 20px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  margin-top: 10px;
+}
+.submit-btn:hover:not(:disabled) { background: #00E0AB; }
+.submit-btn:disabled { background: #3A3A3A; color: #888; cursor: not-allowed; }
+
+.recent-sessions {
+  margin-top: 28px;
+}
+.recent-sessions table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #1E1E1E;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.recent-sessions th, .recent-sessions td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid #2F2F2F;
+  font-size: 0.88rem;
+}
+.recent-sessions th { color: #00C896; font-weight: 600; background: #141414; }
+.recent-sessions a { color: #E8E8E8; font-weight: 600; }
+
+/* ─── View 2 — Results ─── */
+.identity-bar {
+  background: linear-gradient(90deg, #1C3D3A, #2A7868);
+  color: #fff;
+  padding: 14px 22px;
+  border-radius: 8px;
+  margin-bottom: 18px;
+}
+.identity-bar .session-line {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 1rem;
+  color: #fff;
+}
+.identity-bar .meta-line {
+  font-size: 0.82rem;
+  color: #C9F0E4;
+  margin-top: 4px;
+}
+
+.qc-panel { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.qc-pill {
+  display: inline-block;
+  padding: 6px 16px;
+  border-radius: 16px;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.qc-pill.green { background: #1A7050; color: #fff; }
+.qc-pill.yellow { background: #B8821A; color: #fff; }
+.qc-pill.red { background: #B83A4A; color: #fff; }
+
+.qc-reasons {
+  background: #2A1319;
+  border-left: 3px solid #D15A73;
+  padding: 10px 14px;
+  border-radius: 5px;
+  font-size: 0.88rem;
+}
+.qc-reasons ul { margin-left: 20px; }
+.qc-reasons li { color: #F5A0B0; }
+
+.feature-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #1E1E1E;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.feature-table th, .feature-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid #2F2F2F;
+  font-size: 0.9rem;
+}
+.feature-table th { color: #00C896; font-weight: 600; background: #141414; }
+.feature-table td.num { font-family: ui-monospace, Menlo, monospace; color: #E8E8E8; }
+.feature-table td.na { color: #6B6B6B; font-family: ui-monospace, Menlo, monospace; }
+
+.flags-list {
+  background: #141414;
+  border: 1px solid #2F2F2F;
+  border-radius: 8px;
+  padding: 14px 22px;
+  margin-top: 16px;
+  font-size: 0.88rem;
+}
+.flags-list li { padding: 4px 0; color: #C9F0E4; list-style: "› "; margin-left: 14px; }
+
+.download-row { margin-top: 18px; display: flex; gap: 12px; }
+.download-btn {
+  background: #2A7868;
+  color: #fff;
+  border: none;
+  padding: 9px 18px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.download-btn:hover { background: #35937F; }
+
+.notice {
+  background: #2A1E0C;
+  border-left: 3px solid #E8872A;
+  padding: 12px 16px;
+  border-radius: 5px;
+  font-size: 0.84rem;
+  color: #FEE8C8;
+  margin-top: 18px;
+}
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.loading-overlay .spinner {
+  background: #1C3D3A;
+  padding: 28px 38px;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 1rem;
+}
+
+.error-banner {
+  background: #2A1319;
+  border-left: 3px solid #D15A73;
+  color: #F5A0B0;
+  padding: 12px 16px;
+  border-radius: 5px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}

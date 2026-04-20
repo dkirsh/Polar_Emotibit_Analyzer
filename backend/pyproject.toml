@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polar-emotibit-analyzer-backend"
+version = "2.1.0"
+description = "File-only post-hoc analyzer for pre-synched Polar H10 + EmotiBit sessions."
+readme = "../README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "COGS 160 Lab", email = "dkirsh@ucsd.edu" },
+]
+
+dependencies = [
+    # Core pipeline
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "pydantic>=2.5",
+    # HTTP surface
+    "fastapi>=0.109",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+    # Persistence
+    "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.26",
+    "ruff>=0.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
