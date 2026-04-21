@@ -59,20 +59,17 @@ const NECESSARY: AnalyticEntry[] = [
     order: 1,
     title: "Heart rate and electrodermal activity across the session",
     caption:
-      "The two primary physiological channels, overlaid on a shared time axis, " +
-      "with the sync-QC-validated synchronized sample set.",
+      "HR responds fast to environmental change; EDA responds slowly. Read the two together to separate the cardiac and sudomotor axes of the autonomic response.",
     chartKind: "timeseries_overlay",
     dataPaths: ["extended.cleaned_timeseries"],
     whatItShows:
-      "The top panel plots heart rate in beats per minute over the full recorded session. " +
-      "The bottom panel plots tonic electrodermal level in microsiemens on the same time axis. " +
-      "When event markers are present, translucent vertical bands separate baseline, task, and recovery phases so that onset-related excursions are visible without the analyst doing alignment math in their head.",
+      "The top panel plots heart rate (beats per minute) across the session; the bottom panel plots tonic skin conductance (microsiemens) on the same time axis. When the upload includes event markers, translucent vertical bands separate baseline, task, and recovery so that onset-related excursions are visible without eyeballing timestamps.",
     howToRead:
-      "Look first for sustained step-changes in the HR trace at phase boundaries: a ten-to-twenty-beat-per-minute elevation during a stressor is the classic cardiovascular response pattern. In the EDA trace, look for a slow baseline drift — the tonic component, reflecting arousal level — together with faster upward deflections that mark phasic orienting responses to specific events.",
+      "Start with HR. A sustained 10–20 bpm step at a phase boundary is the classic cardiovascular stress response. Then read EDA. A slow upward drift reflects tonic arousal; faster upward deflections are phasic orienting responses to discrete events. Rises together = integrated sympathetic activation. HR up, EDA flat = transient demand without sustained arousal. HR flat, EDA drifting up = slow load accumulating without overt cardiac reaction.",
     architecturalMeaning:
-      "In the cognitive-neuroscience-of-architecture frame, this chart is the single richest window onto how a participant responded to the environmental manipulation. Heart rate indexes the fast cardiac response to perceived demand (Berntson et al., 1997); electrodermal activity indexes the slower, sympathetic-only arousal response that architectural variables like acoustic load, spatial compression, and visual complexity are known to modulate (Boucsein, 2012). When the two channels rise and fall together you are seeing integrated sympathetic activation; when they dissociate you may be seeing a motor or orienting response without a sustained arousal state, or conversely a slowly accumulating stress load without an overt cardiac reaction.",
+      "This chart is the single richest window onto how a participant responded to an environmental manipulation. Heart rate tracks the fast cardiac response to perceived demand (Berntson et al., 1997). EDA tracks the slower, sympathetic-only arousal response that architectural variables — acoustic load, spatial compression, visual complexity, thermal gradient — modulate most reliably (Boucsein, 2012). When the two channels move together, an integrated stress axis is engaging. When they dissociate, the task is engaging one axis only, and the research question should narrow to which.",
     caveats:
-      "Motion artifacts in the EDA trace look like phasic bursts. Cross-check against the motion-artifact timeline diagnostic before concluding that a late-session rise in tonic SCL is a real arousal signal.",
+      "Motion artifacts in the EDA trace mimic phasic bursts. Cross-check the motion-artifact timeline before interpreting a late-session rise in tonic SCL as an arousal signal.",
     references: [
       { apa: "Berntson, G. G., et al. (1997). Heart rate variability: Origins, methods, and interpretive caveats. Psychophysiology, 34, 623–648.", doi: "10.1111/j.1469-8986.1997.tb02140.x" },
       { apa: "Boucsein, W. (2012). Electrodermal Activity (2nd ed.). Springer.", },
@@ -84,15 +81,15 @@ const NECESSARY: AnalyticEntry[] = [
     order: 2,
     title: "Time-domain heart-rate variability",
     caption:
-      "RMSSD, SDNN, and mean HR with their population-norm reference ranges and the session's bootstrapped confidence intervals.",
+      "Three scalars: RMSSD (rapid, vagal), SDNN (total variability), mean HR. Each with its 95 % CI and a population-norm reference range. If one number moves first in an architecture study, it is usually RMSSD.",
     chartKind: "summary_table",
     dataPaths: ["feature_summary", "extended.descriptive_stats"],
     whatItShows:
-      "Three scalar HRV indices summarised with their sample mean, sample standard deviation, and a 95 percent confidence interval computed using the t-distribution rather than z = 1.96. Each row also carries a reference-range annotation based on Shaffer and Ginsberg (2017). RMSSD reflects the rapid, vagally-mediated, beat-to-beat variability that drops during sympathetic activation; SDNN captures the total variance of successive RR intervals across time scales; mean HR is the simple average.",
+      "Three scalar HRV indices, each with sample mean, sample standard deviation, and a 95 % confidence interval computed from the t-distribution (not z = 1.96). Reference ranges follow Shaffer & Ginsberg (2017). RMSSD is the fast, vagally-mediated, beat-to-beat variability; it drops under sympathetic activation. SDNN is the total variance of successive RR intervals across time scales. Mean HR is the simple arithmetic mean in bpm.",
     howToRead:
-      "RMSSD below roughly 25 ms in an adult at rest is low-normal and indicates reduced parasympathetic tone; values in the 40 to 80 ms range are typical for healthy adults at rest (Shaffer and Ginsberg, 2017). SDNN below 50 ms over a five-minute recording is consistent with restricted autonomic range. Mean HR above approximately 90 bpm at rest in a non-exercising participant suggests sympathetic dominance.",
+      "Take the three thresholds one at a time. RMSSD below ≈ 25 ms in an adult at rest is low-normal and signals reduced parasympathetic tone; 40–80 ms is the healthy resting band (Shaffer & Ginsberg, 2017). SDNN below 50 ms over a 5-minute recording signals restricted autonomic range. Mean HR above ≈ 90 bpm at rest in a non-exercising participant signals sympathetic dominance. Read the CI width before the mean — a narrow CI lets you publish a 2 ms shift; a wide CI won't support a 10 ms shift.",
     architecturalMeaning:
-      "RMSSD is the single most responsive HRV index to environmental stressors and the one most used in the architecture-cognition literature (Ulrich et al., 1991; Ottaviani et al., 2016). A depressed RMSSD during the task phase relative to baseline is evidence that the environmental manipulation engaged the sympathetic nervous system; a stable RMSSD across phases is evidence that whatever-else happened, the participant did not perceive an autonomic stressor. SDNN and mean HR are complementary but coarser indices; in a short five-minute session RMSSD usually moves first and most reliably.",
+      "RMSSD is the most responsive HRV index to environmental stressors and the index most used in the architecture-cognition literature (Ulrich et al., 1991; Ottaviani et al., 2016). A depressed RMSSD in the task phase relative to baseline is evidence that the environmental manipulation engaged the sympathetic nervous system. A stable RMSSD across phases is evidence that the manipulation, whatever else it did, did not register as an autonomic stressor. SDNN and mean HR are coarser; in a 5-minute session RMSSD usually moves first and most reliably.",
     references: [
       { apa: "Shaffer, F., & Ginsberg, J. P. (2017). An overview of heart rate variability metrics and norms. Frontiers in Public Health, 5, 258.", doi: "10.3389/fpubh.2017.00258" },
       { apa: "Task Force ESC/NASPE (1996). Heart rate variability: Standards of measurement. Circulation, 93, 1043–1065." },
@@ -104,17 +101,17 @@ const NECESSARY: AnalyticEntry[] = [
     order: 3,
     title: "Heart-rate variability power spectrum",
     caption:
-      "The Welch power spectral density of the RR series with VLF, LF, and HF bands annotated and each band's integrated power reported as a shaded region.",
+      "Where HRV's energy lives. Two peaks give it away: ≈ 0.1 Hz is the Mayer wave (LF band); ≈ 0.25 Hz is respiratory sinus arrhythmia (HF band). A flat spectrum means the autonomic system is quiet — or the recording is too short.",
     chartKind: "spectrum",
     dataPaths: ["extended.psd", "feature_summary"],
     whatItShows:
-      "A log-log plot of spectral power density against frequency from 0 to 0.4 Hz, computed by Welch's method rather than the raw periodogram so that variance is properly controlled. The three physiologically-named bands are rendered as colored vertical strips: VLF from 0.003 to 0.04 Hz, LF from 0.04 to 0.15 Hz, HF from 0.15 to 0.40 Hz. The integrated power in each band is reported numerically alongside the plot. Bands whose recording duration is below the Task Force (1996) minimum are rendered with a striped pattern and the numeric value is replaced with an em dash.",
+      "A log-log plot of spectral power density against frequency from 0 to 0.4 Hz, computed by Welch's method rather than a raw periodogram so variance is controlled (Welch, 1967). Three physiologically-named bands render as coloured vertical strips: VLF 0.003–0.04 Hz, LF 0.04–0.15 Hz, HF 0.15–0.40 Hz. Integrated power in each band is reported numerically beside the plot. Bands whose recording duration is below the Task Force (1996) minimum (300 s for VLF, 120 s for LF, 60 s for HF) render with stripes, and the numeric value is replaced with an em dash.",
     howToRead:
-      "Two visible peaks are diagnostic: one near 0.1 Hz (the Mayer wave, in the LF band) and one in the breathing-rate band near 0.20 to 0.30 Hz (respiratory sinus arrhythmia, in the HF band). Their relative heights set the LF/HF ratio. A flat spectrum is a sign of either reduced autonomic variability or a too-short recording.",
+      "Look for two diagnostic peaks. One near 0.1 Hz is the Mayer wave, the baroreflex oscillation, sitting in the LF band. A second near 0.20–0.30 Hz is respiratory sinus arrhythmia, sitting in the HF band. Their relative heights set the LF/HF ratio. A flat spectrum with no visible peaks means the autonomic system is quiet or the recording is below the band's duration minimum — the striped band tells you which.",
     architecturalMeaning:
-      "The LF band carries a mix of sympathetic and parasympathetic drive plus baroreflex oscillation; the HF band is parasympathetic and largely respiration-driven (Berntson et al., 1997). In architectural contexts the HF band is what drops when a participant is asked to hold attention on a demanding visual or auditory task, and it rebounds rapidly on removal of the demand. The spectrum is the chart that distinguishes a participant who shifted vagally from one whose sympathetic axis actually rose, which the LF/HF scalar alone cannot.",
+      "The LF band carries a mix of sympathetic drive, parasympathetic drive, and baroreflex oscillation; the HF band is parasympathetic and largely respiration-driven (Berntson et al., 1997). HF drops when an architectural manipulation demands sustained attention — a noise source, a compressed spatial setting, a visually-cluttered task environment — and rebounds quickly once the demand lifts. Reading the full spectrum separates two scenarios the LF/HF scalar conflates: a participant who shifted vagally (HF fell, LF stable) from one whose sympathetic axis actually rose (LF rose, HF stable). The difference matters for any architecture-cognition claim about *which* autonomic axis the environment engaged.",
     caveats:
-      "The LF/HF ratio has been critiqued as not a clean index of sympathovagal balance (Billman, 2013); interpret it as one marker of autonomic state rather than a decisive measure.",
+      "The LF/HF ratio has been challenged as a clean index of sympathovagal balance (Billman, 2013). Read it as one marker of autonomic state, not a decisive measure.",
     references: [
       { apa: "Welch, P. D. (1967). IEEE Trans. Audio Electroacoustics, 15, 70–73.", doi: "10.1109/TAU.1967.1161901" },
       { apa: "Billman, G. E. (2013). The LF/HF ratio does not accurately measure cardiac sympatho-vagal balance. Frontiers in Physiology, 4, 26.", doi: "10.3389/fphys.2013.00026" },
@@ -126,15 +123,15 @@ const NECESSARY: AnalyticEntry[] = [
     order: 4,
     title: "Electrodermal activity: tonic baseline and phasic bursts",
     caption:
-      "Tonic skin conductance level summarised as a mean with dispersion, and phasic bursts catalogued with their count, mean amplitude, and temporal density.",
+      "Two clocks in one skin. Tonic SCL drifts slowly with arousal; phasic bursts spike to discrete events. Read them separately — they tell different stories about the same participant.",
     chartKind: "summary_table",
     dataPaths: ["feature_summary", "extended.descriptive_stats"],
     whatItShows:
-      "The upper table reports tonic SCL in microsiemens with min, max, and the 5th to 95th percentile range. The lower table reports phasic activity as a mean of the absolute first difference of the EDA trace, a simple proxy for burst intensity, plus the count of peaks above a 0.05 µS threshold and the density of bursts per minute.",
+      "The upper table reports tonic skin-conductance level (microsiemens) with min, max, and the 5th–95th percentile range. The lower table reports phasic activity as the mean of the EDA trace's absolute first difference — a simple proxy for burst intensity — plus the count of peaks above a 0.05 µS threshold and the density of bursts per minute.",
     howToRead:
-      "Healthy adult tonic SCL ranges approximately 2 to 20 µS depending on sensor and site; a tonic level below roughly 1 µS or above roughly 30 µS is often electrode-placement artifact rather than physiology (Boucsein, 2012). Phasic density above two to three bursts per minute is a meaningful orienting response rate; zero bursts over a several-minute recording is inconsistent with an engaged participant and worth investigating at the hardware level.",
+      "Healthy adult tonic SCL sits in 2–20 µS depending on sensor and site. Below ≈ 1 µS or above ≈ 30 µS is usually electrode-placement artifact, not physiology (Boucsein, 2012). Check this first. Then read phasic density. Two–three bursts per minute is a meaningful orienting-response rate for an engaged participant; zero bursts over several minutes is a hardware-side warning rather than a quiet participant.",
     architecturalMeaning:
-      "Tonic SCL is the slow autonomic axis most sensitive to sustained environmental stressors — noise load, thermal discomfort, dense-crowd conditions (Evans & Cohen, 1987). It rises over tens of seconds. Phasic bursts, by contrast, are the fast orienting responses to discrete events — a door closing, a face appearing in the periphery, a sudden pitch change. In architecture-cognition experiments the two components often tell different stories: a participant can show elevated tonic SCL across a noisy environment without phasic bursts (a chronic arousal state), or conversely phasic bursts to each sound event without a tonic rise (a well-adapted but reactive participant). Reporting the two components separately is not optional.",
+      "Tonic SCL tracks the slow autonomic axis most sensitive to sustained environmental stressors — noise load, thermal discomfort, dense-crowd conditions (Evans & Cohen, 1987). It rises over tens of seconds and falls over minutes. Phasic bursts track the fast orienting response to discrete events — a door closing, a face in the periphery, a sudden pitch change. The two axes often tell different stories about the same session. A participant can run elevated tonic SCL across a noisy corridor without phasic bursts (chronic arousal without novel events), or phasic bursts to each sound event without a tonic rise (a reactive participant who is well-adapted to the baseline). Reporting the two components separately is not optional — collapsing them flattens a distinction the architectural manipulation was designed to draw.",
     references: [
       { apa: "Boucsein, W. (2012). Electrodermal Activity (2nd ed.). Springer." },
       { apa: "Benedek, M., & Kaernbach, C. (2010). A continuous measure of phasic electrodermal activity. Journal of Neuroscience Methods, 190, 80–91.", doi: "10.1016/j.jneumeth.2010.04.028" },
@@ -146,15 +143,15 @@ const NECESSARY: AnalyticEntry[] = [
     order: 5,
     title: "Stress composite, decomposed by channel",
     caption:
-      "The experimental stress index split into its four weighted contributions so the dominant driver is visible at a glance.",
+      "A 0.60 stress score can be built four ways. This chart shows which. Read the dominant-driver label first; the individual contributions tell you which environmental factor the autonomic system is answering.",
     chartKind: "stacked_bar",
     dataPaths: ["extended.stress_decomposition"],
     whatItShows:
-      "A single horizontal bar from 0 to 1 stacked into four coloured segments whose widths are the per-channel contributions to the composite: heart rate (0.35 weight), electrodermal tonic (0.35), electrodermal phasic (0.20), and the inverted HRV protection term (0.10). The total score is marked as a vertical tick; the dominant driver is labelled above the bar.",
+      "A horizontal bar from 0 to 1, stacked into four coloured segments. The segment widths are the four weighted channel contributions: heart rate (weight 0.35), tonic EDA (0.35), phasic EDA (0.20), and the inverted HRV-protection term (0.10). The total is marked by a vertical tick; the dominant driver is labelled above the bar.",
     howToRead:
-      "A stress score of 0.60 built from a 0.35 HR contribution plus a 0.25 EDA-tonic contribution is a very different physiological state from a 0.60 built from a 0.50 phasic contribution plus a 0.10 HRV-deficit; the two would point to different environmental causes and different redesign choices. Read the dominant-driver label first and the individual contributions second.",
+      "A stress score of 0.60 built from 0.35 HR + 0.25 EDA-tonic is a physiologically different state from a 0.60 built from 0.50 phasic + 0.10 HRV-deficit. The two point to different environmental causes and, if the purpose is redesign, to different interventions. Read the dominant-driver label first. Then read the segment widths in order.",
     architecturalMeaning:
-      "This is the single chart that makes the difference between 'the participant was stressed' and 'the participant was stressed because X'. HR-dominated stress in an architectural context typically points to cardiovascular demand from space-use (stairs, standing), to anticipatory arousal, or to an acoustic/visual startle stimulus. EDA-tonic-dominated stress points to sustained sympathetic activation from environmental load — noise, thermal, or cognitive-task demand. Phasic-dominated stress points to a high rate of discrete orienting events — interruptions or stimulus-dense environments. HRV-deficit dominance is the slowest of the four to appear and indicates a chronically low vagal tone reserve.",
+      "This chart distinguishes 'the participant was stressed' from 'the participant was stressed because X', and the because-X differs across the architecture-cognition literature's canonical manipulations. HR-dominated stress points to cardiovascular demand from space-use (stairs, standing posture, an anticipatory arousal cue), or to an acoustic/visual startle. EDA-tonic-dominated stress points to sustained sympathetic activation from environmental load — noise, thermal discomfort, cognitive-task demand (Evans & Cohen, 1987). Phasic-dominated stress points to a stimulus-dense environment — interruptions, reactive events, a high rate of discrete orienting responses. HRV-deficit dominance is the slowest of the four to emerge and signals chronically low vagal tone reserve rather than a specific environmental trigger. Four different architectural moves, four different redesign conversations.",
     caveats:
       "The stress composite is experimental and not psychometrically validated; use it for within-session relative comparison, not as an absolute clinical measure.",
     references: [
@@ -180,7 +177,7 @@ const DIAGNOSTIC: AnalyticEntry[] = [
     howToRead:
       "A green composite score with one red component is a warning: the aggregate looks fine but one sub-component is failing and may dominate a specific downstream feature. The reasons list below names every failing component in natural language. A yellow composite with all components in the 50 to 80 range is a cleaner failure mode to interpret than a green composite with one red component.",
     architecturalMeaning:
-      "Sync quality is the gate between 'data' and 'interpretable data' in a two-device physiological recording. The sibling repo's V2.1 repair list documents why: a pipeline that runs unconditionally on 5 percent temporal overlap produces numbers indistinguishable from numbers produced on 95 percent overlap, and a researcher cannot tell the difference by looking at the numbers alone. This is the chart that tells you whether to trust the other twelve.",
+      "In an architecture-cognition study the dependent variables a researcher reports — stress (via RMSSD and tonic SCL), attention (via HR reactivity and phasic EDA), arousal (via LF/HF and SCL), recovery (via RMSSD rebound) — are each derived from pooled estimates across the session. All of them are only as trustworthy as the synchronisation between the Polar and EmotiBit clocks. A five-minute recording of a participant walking through a compressed corridor, a noisy open-plan office, or a thermally-unstable atrium will produce numerically plausible RMSSD and SCL values even if the two devices were drifting apart — and the researcher will then report an effect of the environmental manipulation that is partly an effect of clock drift. This panel is the gate that decides whether the stress / attention / arousal / recovery numbers downstream are about the room or about the clock.",
     references: [
       { apa: "Sibling repo docs/GAP_ANALYSIS_POTEMKIN_2026-03-02.md." },
     ],
@@ -199,7 +196,7 @@ const DIAGNOSTIC: AnalyticEntry[] = [
     howToRead:
       "A good drift correction produces residuals that hover tightly around zero across the session. A single-segment fit whose residuals grow monotonically at the tails is the classic signature of temperature-dependent crystal drift in at least one of the devices (Gilfriche et al., 2022), which the piecewise fit is designed to catch. More than five segments on a five-minute recording usually indicates timestamp-jitter noise that should have been filtered upstream; the drift model is being asked to compensate for something it was not designed for.",
     architecturalMeaning:
-      "This chart is only load-bearing when the sync-QC gate returned yellow. It answers the follow-up question: was the sync failure a drift problem, a jitter problem, or a true non-overlap problem? The answer determines whether to re-collect with NTP or to accept the session with a noted limitation.",
+      "Clock drift has a specific failure mode in architecture-cognition studies that run longer than a single seated block. Thermal-gradient walks (participants moving between outdoor and indoor zones, from a cool atrium into a warm corridor), daylight-dynamic protocols (sessions that span a sunset or a daylight-activity cycle), and long-duration crowding or acoustic exposures produce exactly the conditions under which crystal-oscillator drift becomes non-linear and non-trivial. A piecewise drift fit whose residuals fan out at the tails means the stress-recovery trajectory you report — RMSSD rebound after leaving a demanding environment, tonic SCL decay after a noise exposure — is partly a clock-alignment artefact rather than a real autonomic shift. Pre-registered thermal, acoustic, and daylight-gradient studies are the protocols most vulnerable here; this chart tells you when you can publish the effect and when you need to re-collect with NTP-synchronised devices.",
     references: [
       { apa: "Gilfriche, P., et al. (2022). Validity of the Polar H10 sensor for HRV analysis. Sensors, 22, 6536.", doi: "10.3390/s22176536" },
     ],
@@ -237,7 +234,7 @@ const DIAGNOSTIC: AnalyticEntry[] = [
     howToRead:
       "A clean tachogram shows a smooth, slowly-modulated series between approximately 600 and 1200 ms at rest. Sharp single-beat excursions — a beat at 400 ms followed immediately by a beat at 1600 ms — are the classic atrial-premature-contraction pattern. Sharp excursions clustered together indicate either a real arrhythmia or a burst of detection failures from signal dropout.",
     architecturalMeaning:
-      "The tachogram is the first chart that every HRV analyst looks at, because every downstream HRV number is only as clean as this series. A tachogram with 5 percent ectopic beats will produce an RMSSD that is materially corrupted regardless of how sophisticated the downstream pipeline is. If this chart looks bad, no amount of statistical correction will save the analysis.",
+      "Every dependent variable the architecture-cognition literature reports from HRV — RMSSD as the canonical stress index (Ulrich et al., 1991; Ottaviani et al., 2016), LF/HF as an autonomic-balance index responsive to cognitive load and thermal discomfort, SDNN as a coarser variability index — is a derived statistic over this beat-to-beat series. A tachogram with 5 percent ectopic beats produces a materially corrupted RMSSD regardless of how sophisticated the downstream pipeline is; an elegant acoustic-intervention paper or a daylight-restoration study can be undone by a ten-second run of detection failures on a sweaty chest strap during the task phase. When a participant in a crowding protocol generates a high-ectopic burst at the exact moment the environmental manipulation begins, the tachogram is what tells you whether you have discovered a cardiac response to crowding or an electrode-contact response to crowding-induced motion.",
     references: [
       { apa: "Lipponen, J. A., & Tarvainen, M. P. (2019). A robust algorithm for HRV time-series artefact correction. JMET, 43, 173–181.", doi: "10.1080/03091902.2019.1640306" },
     ],
@@ -392,7 +389,7 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
     howToRead:
       "Chung et al. (2026) report Pearson r > 0.99 between the Polar H10 and a gold-standard ECG; a pipeline that claims Kubios parity should produce a bias near zero and limits of agreement narrow enough to be uninformative at the session level. A non-zero bias means this pipeline has a systematic offset; wide LoAs mean precision is lower than Kubios.",
     architecturalMeaning:
-      "This is the chart that lets you claim, in a methods section, that your numbers are interchangeable with Kubios — or, crucially, that they are not. Either answer is scientifically publishable; silence on the question is not.",
+      "Kubios is the reference tool the architecture-cognition literature pools around when it reports RMSSD and LF/HF in the wake of an environmental manipulation (daylight exposure, acoustic load, spatial compression, thermal gradient, crowding). A reviewer of a paper claiming an acoustic-load effect on stress recovery will want to know whether the authors' RMSSD values are interchangeable with Kubios's — and therefore comparable to the twenty other papers in the review's meta-analysis that did use Kubios. This chart is the artefact that answers that question for a paper's methods section. A near-zero bias and tight LoAs let the stress-recovery paper join the pooled literature; a non-zero bias puts the paper in its own orbit, which is sometimes defensible but must be explicitly argued rather than glossed. Silence on this question, given the pipeline's Kubios-parity claim, is not a publishable methods section.",
     references: [
       { apa: "Bland, J. M., & Altman, D. G. (1986). Statistical methods for assessing agreement. The Lancet, 327, 307–310.", doi: "10.1016/S0140-6736(86)90837-8" },
       { apa: "Chung, V., et al. (2026). Validity of the Polar H10 for continuous HR and HR synchrony. Sensors, 26, 855.", doi: "10.3390/s26030855" },
@@ -416,7 +413,7 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
     howToRead:
       "A well-centred unimodal distribution around 800 to 1000 ms is typical at rest. A secondary peak at twice the main mode is the signature of every-other-beat detection failures. A primary mode below 500 ms suggests exercise or a detector that is counting T-waves as R-waves.",
     architecturalMeaning:
-      "This is a data-hygiene chart before it is a physiology chart. Its purpose is to answer 'can I trust this RR series?' before any of the HRV numbers are reported.",
+      "Architecture-cognition protocols routinely place participants into conditions that produce physiologically extreme heart rates even at rest — a cold atrium pushes mean HR down via parasympathetic activation, a crowded corridor pushes it up via sympathetic activation, a stair-climbing between-condition transition pushes it above task baseline for several minutes after the transition. The RR histogram is what distinguishes a legitimately-shifted distribution (one that has moved but is still unimodal and smooth) from a corrupted one (bimodal, or clipped at an implausible floor). A paper claiming that a daylight intervention shifted mean HR by 8 bpm has a defensible claim only if the histogram shape is preserved under the intervention; a bimodal distribution in the intervention phase means the HR shift the paper reports is partly a detector-failure artefact, and the stress and arousal DVs derived from it are compromised. Reviewers ask for this chart specifically.",
     references: [
       { apa: "Task Force ESC/NASPE (1996). Heart rate variability. Circulation, 93, 1043–1065." },
     ],
@@ -472,7 +469,8 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
       "A timeline of cumulative-beat positions with ectopic-flagged beats marked. A numeric summary reports total beats, ectopic beats, and ectopic rate in beats per minute.",
     howToRead:
       "An ectopic rate below 1 beat per minute is typical for a healthy participant at rest. Clusters of ectopics at specific time points suggest either arrhythmia episodes or signal dropout. An ectopic rate above 5 per minute with no clinical context is almost always a detection problem rather than a physiology problem.",
-    architecturalMeaning: "The ectopic timeline, not just the ectopic count, is what lets you tell 'one burst of dropout early' from 'distributed misdetection throughout'.",
+    architecturalMeaning:
+      "The temporal distribution of ectopic beats is load-bearing for architecture-cognition claims that turn on a specific phase transition — the exact moment the participant entered a crowded zone, the first bar of an acoustic stimulus, the step across a daylight threshold. A paper reporting a stress increase at task onset (an RMSSD drop) or an arousal increase at an acoustic onset (an EDA-tonic lift coincident with HR elevation) has a defensible claim only if the ectopic timeline shows no corresponding burst of detection failures at that same moment; otherwise the autonomic response the paper attributes to the environmental manipulation is partly an artefact of the participant's movement at the transition. For seated protocols (acoustic load without locomotion, thermal gradient in a stationary chair, daylight manipulation under fixed head posture) a near-zero ectopic rate throughout is the baseline expectation and a cluster coincident with the stress or arousal signal is suspicious. For walking protocols the expectation inverts — ectopics at transition moments are predictable and must be excluded from the windowed-feature analysis that the stress and recovery DVs derive from, rather than left to corrupt them.",
     references: [
       { apa: "Lipponen, J. A., & Tarvainen, M. P. (2019). A robust algorithm for HRV time-series artefact correction. JMET, 43, 173–181.", doi: "10.1080/03091902.2019.1640306" },
     ],

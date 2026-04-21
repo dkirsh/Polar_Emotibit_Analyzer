@@ -169,8 +169,11 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
   font-size: 0.9rem;
 }
+/* Probe-9 WCAG AA fix 2026-04-20: yellow pill deepened from #B8821A
+   (3.36:1 on white) to #8A6110 (5.10:1) so small white text clears the
+   4.5:1 threshold. Green and red already passed. */
 .qc-pill.green { background: #1A7050; color: #fff; }
-.qc-pill.yellow { background: #B8821A; color: #fff; }
+.qc-pill.yellow { background: #8A6110; color: #fff; }
 .qc-pill.red { background: #B83A4A; color: #fff; }
 
 .qc-reasons {
@@ -198,7 +201,10 @@ a:hover { text-decoration: underline; }
 }
 .feature-table th { color: #00C896; font-weight: 600; background: #141414; }
 .feature-table td.num { font-family: ui-monospace, Menlo, monospace; color: #E8E8E8; }
-.feature-table td.na { color: #6B6B6B; font-family: ui-monospace, Menlo, monospace; }
+/* Probe-9 WCAG AA fix 2026-04-20: NA-cell text lightened from #6B6B6B
+   (3.13:1 on #1E1E1E card bg) to #9A9A9A (5.04:1) so em-dash "no value"
+   cells remain legible while still reading as subdued. */
+.feature-table td.na { color: #9A9A9A; font-family: ui-monospace, Menlo, monospace; }
 
 .flags-list {
   background: #141414;

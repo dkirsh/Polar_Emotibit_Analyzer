@@ -25,7 +25,7 @@ export const AnalyticDetailPage: React.FC = () => {
     getSession(sessionId).then(setSession).catch(() => {});
   }, [sessionId]);
 
-  if (!session || !analyticId) return <main className="page">Loading…</main>;
+  if (!session || !analyticId || !sessionId) return <main className="page">Loading…</main>;
   const a = getAnalytic(analyticId);
   if (!a) return (
     <main className="page">
