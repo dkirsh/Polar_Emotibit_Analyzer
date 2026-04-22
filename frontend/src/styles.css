@@ -2,6 +2,24 @@
    Dark background with high-contrast teal accents; accessible contrast ratios.
    No dark-blue-on-dark (per DK's WCAG rule). */
 
+/* Chart palette — single source of truth for SVG colours in the
+   analytics dashboard. Read at runtime by frontend/src/analytics/
+   chartPalette.ts so every chart pulls from :root rather than
+   embedding hex literals. Re-theme by overriding these vars. */
+:root {
+  --chart-hr: #00C896;
+  --chart-eda: #E8872A;
+  --chart-accent: #4A6FA8;
+  --chart-bg: #141414;
+  --chart-grid: #2F2F2F;
+  --chart-text: #E8E8E8;
+  --chart-sub: #B8B8B8;
+  --chart-good: #1A7050;
+  --chart-warn: #B8821A;
+  --chart-bad: #B83A4A;
+  --chart-resp: #A78BFA;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; }
 body {

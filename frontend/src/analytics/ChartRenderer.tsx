@@ -11,6 +11,7 @@
 import React from "react";
 import { ChartKind } from "./catalog";
 import { StoredSession } from "../api";
+import { PALETTE } from "./chartPalette";
 import { safe } from "./util";
 
 type Props = {
@@ -20,19 +21,10 @@ type Props = {
   height?: number;
 };
 
-const PALETTE = {
-  hr: "#00C896",
-  eda: "#E8872A",
-  accent: "#4A6FA8",
-  bg: "#141414",
-  grid: "#2F2F2F",
-  text: "#E8E8E8",
-  sub: "#B8B8B8",
-  good: "#1A7050",
-  warn: "#B8821A",
-  bad: "#B83A4A",
-  resp: "#A78BFA",  // purple for respiratory channel
-};
+// PALETTE is now imported from chartPalette.ts, which reads from
+// the --chart-* CSS custom properties defined in styles.css. The
+// hex literals previously lived here; they now live in a single
+// source of truth and can be re-themed without editing TSX.
 
 export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, height = 340 }) => {
   const ext = session.extended;
@@ -302,7 +294,7 @@ function PoincarePlot({ session, width, height }: { session: StoredSession; widt
         y1={toY(mean) + (-sd1 / (vMax - vMin)) * sz * Math.SQRT1_2}
         x2={toX(mean) + (sd1 / (vMax - vMin)) * sz * Math.SQRT1_2}
         y2={toY(mean) + (sd1 / (vMax - vMin)) * sz * Math.SQRT1_2}
-        stroke="#A78BFA"
+        stroke={PALETTE.resp}
         strokeWidth={1}
         strokeDasharray="2,2"
       />
@@ -312,7 +304,7 @@ function PoincarePlot({ session, width, height }: { session: StoredSession; widt
         y1={toY(mean) + (sd2 / (vMax - vMin)) * sz * Math.SQRT1_2}
         x2={toX(mean) + (sd2 / (vMax - vMin)) * sz * Math.SQRT1_2}
         y2={toY(mean) + (-sd2 / (vMax - vMin)) * sz * Math.SQRT1_2}
-        stroke="#4A6FA8"
+        stroke={PALETTE.accent}
         strokeWidth={1}
         strokeDasharray="2,2"
       />
@@ -642,8 +634,8 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
       <rect width={width} height={height} fill={PALETTE.bg} />
 
       {/* Reference bands */}
-      <rect x={pad} y={pad} width={W} height={highY - pad} fill="#B83A4A" opacity={0.06} />
-      <rect x={pad} y={lowY} width={W} height={pad + H - lowY} fill="#1A7050" opacity={0.06} />
+      <rect x={pad} y={pad} width={W} height={highY - pad} fill={PALETTE.bad} opacity={0.06} />
+      <rect x={pad} y={lowY} width={W} height={pad + H - lowY} fill={PALETTE.good} opacity={0.06} />
 
       {/* Band labels */}
       <text x={pad + 4} y={highY - 4} fill={PALETTE.bad} fontSize="9" opacity={0.7}>elevated (0.50+)</text>
