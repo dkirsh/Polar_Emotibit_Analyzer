@@ -18,7 +18,12 @@ from typing import Any, Optional
 import pandas as pd
 from fastapi import APIRouter, Form, HTTPException, UploadFile, status
 
-from app.schemas.analysis import AnalysisResponse
+from app.schemas.analysis import (
+    AnalysisResponse,
+    BlandAltmanMetric,
+    SessionDetail,
+    SessionSummary,
+)
 from app.services.ingestion.parsers import parse_emotibit_csv, parse_polar_csv
 from app.services.processing.benchmark import bland_altman
 from app.services.processing.clean import clean_signals
@@ -268,45 +273,45 @@ def _subsample_timeseries(df: pd.DataFrame, max_points: int = 1000) -> list[dict
     return [{c: (None if pd.isna(row[c]) else float(row[c])) for c in cols} for _, row in sub.iterrows()]
 
 
-@router.get("/sessions")
-def list_sessions(limit: int = 10) -> list[dict[str, Any]]:
+@router.get("/sessions", response_model=list[SessionSummary])
+def list_sessions(limit: int = 10) -> list[SessionSummary]:
     """List recent sessions (for the view 1 Recent-Sessions table)."""
     items = sorted(
         _SESSION_STORE.values(),
         key=lambda s: s.get("analyzed_at", ""),
         reverse=True,
     )
-    slim = [
-        {
-            "session_id": s["session_id"],
-            "subject_id": s["subject_id"],
-            "session_date": s["session_date"],
-            "analyzed_at": s["analyzed_at"],
-            "sync_qc_gate": s["result"].get("sync_qc_gate"),
-            "sync_qc_score": s["result"].get("sync_qc_score"),
-        }
+    return [
+        SessionSummary(
+            session_id=s["session_id"],
+            subject_id=s["subject_id"],
+            session_date=s["session_date"],
+            analyzed_at=s["analyzed_at"],
+            sync_qc_gate=s["result"].get("sync_qc_gate"),
+            sync_qc_score=s["result"].get("sync_qc_score"),
+        )
         for s in items[:limit]
     ]
-    return slim
 
 
-@router.get("/sessions/{session_id}")
-def get_session(session_id: str) -> dict[str, Any]:
+@router.get("/sessions/{session_id}", response_model=SessionDetail)
+def get_session(session_id: str) -> SessionDetail:
     """Fetch one session's full metadata + analysis response."""
     if session_id not in _SESSION_STORE:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No session found for session_id={session_id!r}",
         )
-    return _SESSION_STORE[session_id]
+    record = _SESSION_STORE[session_id]
+    return SessionDetail(**record)
 
 
-@router.post("/benchmark/kubios")
+@router.post("/benchmark/kubios", response_model=list[BlandAltmanMetric])
 async def benchmark_against_kubios(
     system_file: UploadFile,
     kubios_file: UploadFile,
     join_col: str = Form("session_id"),
-) -> list[dict[str, Any]]:
+) -> list[BlandAltmanMetric]:
     """Bland-Altman agreement vs a Kubios HRV Premium export."""
     try:
         sys_text = (await system_file.read()).decode("utf-8", errors="replace")
@@ -327,7 +332,5 @@ async def benchmark_against_kubios(
             detail=str(exc),
         )
 
-    return [
-        c.model_dump() if hasattr(c, "model_dump") else c.dict()
-        for c in comparisons
-    ]
+    # FastAPI + Pydantic handle serialization; return the models as-is.
+    return list(comparisons)

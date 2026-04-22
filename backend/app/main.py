@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routes import analysis, validate
+from app.schemas.analysis import HealthResponse
 
 app = FastAPI(
     title="Polar-EmotiBit Analyzer API",
@@ -37,10 +38,10 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
-def health() -> dict[str, str | int]:
+@app.get("/health", response_model=HealthResponse)
+def health() -> HealthResponse:
     """Liveness probe."""
-    return {"ok": True, "version": "2.1.0", "scope": "file-only post-hoc"}
+    return HealthResponse(ok=True, version="2.1.0", scope="file-only post-hoc")
 
 
 app.include_router(analysis.router, prefix="/api/v1")

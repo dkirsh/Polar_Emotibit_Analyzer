@@ -1,6 +1,91 @@
 """Schemas for ingestion and analysis endpoints."""
 
+from typing import Any
+
 from pydantic import BaseModel, Field
+
+
+# F3 fix 2026-04-21: response models for the seven endpoints that
+# previously returned untyped dict[str, Any]. Every endpoint now has
+# an OpenAPI schema, which enables client-side type generation and
+# catches response-shape drift at test time.
+
+
+class HealthResponse(BaseModel):
+    """Liveness probe response from GET /health."""
+
+    ok: bool
+    version: str
+    scope: str
+
+
+class SessionSummary(BaseModel):
+    """Slim session row for the recent-sessions list."""
+
+    session_id: str
+    subject_id: str
+    session_date: str
+    analyzed_at: str
+    sync_qc_gate: str | None = None
+    sync_qc_score: float | None = None
+
+
+class SessionDetail(BaseModel):
+    """Full session record stored in the in-memory session store.
+
+    The `result` field carries the full AnalysisResponse-shaped dict
+    that the analyze endpoint emitted; kept as dict[str, Any] here
+    because the session store dates from before AnalysisResponse was
+    a first-class schema and migrating every write site is Phase 3
+    polish, not P1 work.
+    """
+
+    session_id: str
+    subject_id: str
+    study_id: str
+    session_date: str
+    analyzed_at: str
+    operator: str | None = None
+    notes: str | None = None
+    markers_summary: dict[str, Any] | None = None
+    result: dict[str, Any]
+
+
+class CsvTimestampRange(BaseModel):
+    """Timestamp extent of an uploaded CSV."""
+
+    min: int
+    max: int
+    span_s: int
+
+
+class CsvValidationResponse(BaseModel):
+    """Response for the three /validate/csv/* endpoints.
+
+    The three endpoints share most fields. Optional fields carry
+    per-source information (accelerometer/respiration for EmotiBit;
+    native RR presence for Polar; event-code inventory for markers)
+    and are None on the other sources.
+    """
+
+    valid: bool
+    filename: str | None = None
+    n_rows: int | None = None
+    columns_present: list[str] = Field(default_factory=list)
+    timestamp_range_ms: CsvTimestampRange | None = None
+
+    # EmotiBit-specific
+    has_accelerometer: bool | None = None
+    has_respiration: bool | None = None
+
+    # Polar-specific
+    has_native_rr: bool | None = None
+    rr_source: str | None = None         # "native_polar" | "derived_from_bpm"
+    rr_source_note: str | None = None    # human-readable summary of the choice
+
+    # Markers-specific
+    event_codes: list[str] | None = None
+    n_events: int | None = None
 
 
 class IngestionSummary(BaseModel):
