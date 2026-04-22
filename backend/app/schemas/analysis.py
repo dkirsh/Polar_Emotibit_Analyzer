@@ -143,6 +143,14 @@ class FeatureSummary(BaseModel):
     lf_pct: float | None = None
     hf_pct: float | None = None
 
+    # Second-generation stress composite using Kubios-grade inputs.
+    # See app/services/processing/stress.py::compute_stress_score_v2 for
+    # the rationale, citations, and channel weights. Still experimental,
+    # still not validated — use for within-session relative comparison
+    # alongside v1.
+    stress_score_v2: float | None = None
+    stress_v2_contributions: dict[str, float | None] | None = None
+
 
 class AnalysisResponse(BaseModel):
     """Top-level analysis response."""

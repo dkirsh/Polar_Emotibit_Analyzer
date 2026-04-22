@@ -58,6 +58,7 @@ from app.services.processing.features import (
 from app.services.processing.stress import (
     STRESS_SCORE_LABEL,
     compute_stress_score,
+    compute_stress_score_v2,
 )
 from app.services.processing.sync import synchronize_signals
 from app.services.processing.sync_qc import compute_sync_qc
@@ -179,6 +180,24 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
     eda_mean_us, eda_phasic_index = compute_eda_features(cleaned)
     stress_score = compute_stress_score(rmssd_ms, mean_hr_bpm, eda_mean_us, eda_phasic_index)
 
+    # v2 composite with Kubios-grade inputs (pNN50, SD1/SD2 ratio, LF_nu).
+    # Published evidence that each adds information over v1's RMSSD-only
+    # vagal channel: Shaffer & Ginsberg (2017) on pNN50 stability on
+    # short segments; Thayer et al. (2012) on Poincaré descriptors under
+    # sympathetic stress; Task Force (1996) on LF_nu for between-subject
+    # comparison. Emitted alongside v1; both carry the experimental /
+    # not-validated caveat.
+    stress_v2, stress_v2_contrib = compute_stress_score_v2(
+        rmssd_ms=rmssd_ms,
+        mean_hr_bpm=mean_hr_bpm,
+        eda_mean_us=eda_mean_us,
+        eda_phasic_index=eda_phasic_index,
+        pnn50=time_domain_ext.get("pnn50"),
+        sd1_sd2_ratio=poincare.get("sd1_sd2_ratio"),
+        lf_nu=freq_features.get("lf_nu"),
+        rsa_amplitude=None,  # wire when RSA is available
+    )
+
     # -- Step 6: Quality flags ------------------------------------------------
     if len(cleaned) < 60:
         quality_flags.append("Low synchronized sample count (< 60 samples)")
@@ -204,6 +223,14 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
 
     # V2.1 FIX [Repair 1.6]: stress formula caveat
     quality_flags.append(f"Stress score is {STRESS_SCORE_LABEL}. Use for within-session relative comparison only.")
+    # 2026-04-21: v2 composite note — says what was added and that it's
+    # likewise unvalidated.
+    v2_active = int(stress_v2_contrib.get("_active_channels", 0) or 0)
+    quality_flags.append(
+        f"Stress v2 composite = {stress_v2:.3f} using {v2_active} active channels "
+        f"(Kubios-grade inputs pNN50, SD1/SD2, LF_nu, RSA where available). "
+        f"Still experimental; use alongside v1 for triangulation, not as a validated instrument."
+    )
 
     # -- Step 7: Build response -----------------------------------------------
     primary_drift = drift_model.segments[0] if drift_model.segments else None
@@ -233,6 +260,8 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
         vlf_pct=freq_features.get("vlf_pct"),
         lf_pct=freq_features.get("lf_pct"),
         hf_pct=freq_features.get("hf_pct"),
+        stress_score_v2=stress_v2,
+        stress_v2_contributions=stress_v2_contrib,
     )
     report_markdown = build_markdown_report(feature_summary, quality_flags)
 
