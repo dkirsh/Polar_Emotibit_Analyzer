@@ -569,6 +569,65 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
       { apa: "Healey, J. A., & Picard, R. W. (2005). Detecting stress during real-world driving tasks using physiological sensors. IEEE TITS, 6(2), 156–166.", doi: "10.1109/TITS.2005.848368" },
     ],
   },
+  {
+    // 2026-04-21 Kubios-parity addition ---------------------------------
+    id: "q-s-08-sympathovagal-nu",
+    group: "question",
+    question: "What is the sympathovagal balance in normalised units?",
+    category: "science",
+    order: 8,
+    title: "Sympathovagal balance — normalised units (LF_nu, HF_nu)",
+    caption:
+      "LF and HF power expressed as percent of (LF + HF); the Task Force (1996) recommendation for between-subject comparison.",
+    chartKind: "stacked_bar",
+    dataPaths: ["feature_summary.lf_nu", "feature_summary.hf_nu"],
+    minimumPreconditions: [
+      "Recording duration ≥ 120 s (LF band minimum)",
+      "Native Polar RR intervals (rr_ms column present)",
+    ],
+    whatItShows:
+      "Two stacked bars summing to 100 %: LF_nu in the lower portion, HF_nu above. A bar dominated by LF_nu indicates sympathovagal balance shifted toward sympathetic dominance; a bar dominated by HF_nu indicates parasympathetic dominance (respiratory-sinus-arrhythmia-driven variability).",
+    howToRead:
+      "Read the ratio, not the absolute heights. Healthy resting adults typically land between 40 % and 70 % on LF_nu; under acute psychological stress LF_nu rises toward 80–90 %. Between-subject comparisons use these normalised units rather than the raw LF and HF powers because raw powers scale with heart rate and confound between-subject differences.",
+    architecturalMeaning:
+      "A study comparing the sympathovagal response to different architectural environments should report LF_nu / HF_nu rather than raw LF and HF because subjects will differ in baseline heart rate. The normalised units control for that.",
+    scienceNote:
+      "LF_nu and HF_nu are constrained by construction to sum to 100 %, so the two fields carry one degree of freedom between them. The field is sometimes called 'sympathovagal index'; Task Force (1996) reports both values so readers can see the decomposition even though one implies the other.",
+    references: [
+      { apa: "Task Force of the European Society of Cardiology and the North American Society of Pacing and Electrophysiology. (1996). Heart rate variability. Circulation, 93(5), 1043–1065.", doi: "10.1161/01.CIR.93.5.1043" },
+    ],
+  },
+  {
+    id: "q-s-09-stress-v1-vs-v2",
+    group: "question",
+    question: "How does stress composite v2 compare to v1?",
+    category: "science",
+    order: 9,
+    title: "Stress composite v1 vs v2 — per-channel contributions",
+    caption:
+      "v2 adds pNN50, SD1/SD2 ratio, and LF_nu to v1's RMSSD-only HRV channel. This panel shows both scores and the per-channel contributions that produced v2.",
+    chartKind: "summary_table",
+    dataPaths: [
+      "feature_summary.stress_score",
+      "feature_summary.stress_score_v2",
+      "feature_summary.stress_v2_contributions",
+    ],
+    minimumPreconditions: [
+      "Native Polar RR intervals for v2 to benefit from Kubios-grade inputs",
+    ],
+    whatItShows:
+      "A two-row table at the top showing v1 score and v2 score side-by-side, followed by a seven-row contribution table: HR, EDA (tonic), EDA (phasic), vagal composite (RMSSD + pNN50 averaged), sympathovagal (LF_nu when available), rigidity (1 − SD1/SD2), respiratory (RSA when available). Channels that were inactive for this session appear as '(inactive)' rather than as 0.",
+    howToRead:
+      "A large divergence between v1 and v2 means the new HRV inputs are saying something the RMSSD-only v1 could not. A small divergence means the extra channels did not change the verdict. Read the contribution table to see which channel moved the score and by how much; the _active_channels line tells you how many of the seven channels had enough data to participate.",
+    architecturalMeaning:
+      "If a study relies on the stress score to rank architectural environments, the v1-vs-v2 panel is the place to look when v1 and v2 rank the environments differently. Usually the v2 ranking is the one to trust because it draws on more independent physiological signals, but the v2 composite is still experimental and should not be used alone.",
+    caveats:
+      "Both v1 and v2 are labelled experimental and not psychometrically validated against standard stress instruments (PSS, DASS-21) or physiological ground truth (cortisol). Use the score for within-session relative comparison only. Validation is a 90-day task flagged in the stress.py module docstring.",
+    references: [
+      { apa: "Shaffer, F., & Ginsberg, J. P. (2017). An overview of heart rate variability metrics and norms. Frontiers in Public Health, 5, 258.", doi: "10.3389/fpubh.2017.00258" },
+      { apa: "Thayer, J. F., et al. (2012). A meta-analysis of heart rate variability and neuroimaging studies. Neuroscience & Biobehavioral Reviews, 36(2), 747–756.", doi: "10.1016/j.neubiorev.2011.11.009" },
+    ],
+  },
 ];
 
 export const CATALOG: AnalyticEntry[] = [...NECESSARY, ...DIAGNOSTIC, ...QUESTION_DRIVEN];
