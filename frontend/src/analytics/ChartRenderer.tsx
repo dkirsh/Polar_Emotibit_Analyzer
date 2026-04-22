@@ -64,6 +64,8 @@ export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, hei
       return <ForestPlot session={session} width={width} height={height} />;
     case "edr_respiration":
       return <EDRRespiration session={session} width={width} height={height} />;
+    case "stress_timeline":
+      return <StressTimeline session={session} width={width} height={height} />;
     case "phase_comparison":
     case "bland_altman":
     default:
@@ -536,6 +538,109 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
       {/* Time axis */}
       <text x={pad} y={height - 5} fill={PALETTE.sub} fontSize="10">{tMin.toFixed(0)} s</text>
       <text x={pad + W - 40} y={height - 5} fill={PALETTE.sub} fontSize="10">{tMax.toFixed(0)} s</text>
+    </svg>
+  );
+}
+
+function StressTimeline({ session, width, height }: { session: StoredSession; width: number; height: number }) {
+  const w = session.extended?.windowed;
+  if (!w || w.t_s.length < 2) return <Empty msg="Not enough windows for stress trajectory" />;
+
+  const t = w.t_s;
+  const stress = w.stress;
+  const hrC = w.hr_contribution;
+  const edaC = w.eda_contribution;
+  const hrvC = w.hrv_contribution;
+  const rsaC = w.rsa_contribution;
+
+  const pad = 44;
+  const W = width - pad * 2;
+  const H = height - pad * 2;
+  const tMin = t[0], tMax = t[t.length - 1];
+  const toX = (tv: number) => pad + ((tv - tMin) / (tMax - tMin || 1)) * W;
+  const toY = (v: number) => pad + H - (Math.min(v, 1.0) * H);
+
+  // Build stacked area layers: bottom to top = HR, EDA, HRV, RSA
+  const channels = [
+    { values: hrC, color: PALETTE.hr, label: "HR" },
+    { values: edaC, color: PALETTE.eda, label: "EDA" },
+    { values: hrvC, color: PALETTE.bad, label: "HRV deficit" },
+    { values: rsaC, color: PALETTE.resp, label: "RSA deficit" },
+  ];
+
+  // Compute cumulative stacks per time point
+  const stacks: number[][] = channels.map(() => new Array(t.length).fill(0));
+  for (let i = 0; i < t.length; i++) {
+    let cumulative = 0;
+    for (let c = 0; c < channels.length; c++) {
+      stacks[c][i] = cumulative;
+      cumulative += channels[c].values[i] || 0;
+    }
+  }
+
+  // Build SVG area paths for each channel (bottom-to-top stacking)
+  const areaPaths = channels.map((ch, c) => {
+    const topPts = t.map((tv, i) => `${toX(tv).toFixed(1)},${toY(stacks[c][i] + (ch.values[i] || 0)).toFixed(1)}`);
+    const botPts = t.map((tv, i) => `${toX(tv).toFixed(1)},${toY(stacks[c][i]).toFixed(1)}`).reverse();
+    return `M${topPts.join(" L")} L${botPts.join(" L")} Z`;
+  });
+
+  // Stress composite line (total)
+  const stressLine = t.map((tv, i) => `${i === 0 ? "M" : "L"}${toX(tv).toFixed(1)},${toY(stress[i]).toFixed(1)}`).join(" ");
+
+  // Reference band boundaries
+  const lowY = toY(0.25);
+  const highY = toY(0.50);
+
+  return (
+    <svg width={width} height={height} role="img" aria-label="Stress composite trajectory">
+      <rect width={width} height={height} fill={PALETTE.bg} />
+
+      {/* Reference bands */}
+      <rect x={pad} y={pad} width={W} height={highY - pad} fill="#B83A4A" opacity={0.06} />
+      <rect x={pad} y={lowY} width={W} height={pad + H - lowY} fill="#1A7050" opacity={0.06} />
+
+      {/* Band labels */}
+      <text x={pad + 4} y={highY - 4} fill={PALETTE.bad} fontSize="9" opacity={0.7}>elevated (0.50+)</text>
+      <text x={pad + 4} y={lowY + 12} fill={PALETTE.good} fontSize="9" opacity={0.7}>low (&lt;0.25)</text>
+
+      {/* Reference lines */}
+      <line x1={pad} y1={lowY} x2={pad + W} y2={lowY} stroke={PALETTE.good} strokeWidth={1} strokeDasharray="4,4" opacity={0.5} />
+      <line x1={pad} y1={highY} x2={pad + W} y2={highY} stroke={PALETTE.bad} strokeWidth={1} strokeDasharray="4,4" opacity={0.5} />
+
+      {/* Stacked area fills */}
+      {areaPaths.map((d, i) => (
+        <path key={channels[i].label} d={d} fill={channels[i].color} opacity={0.35} />
+      ))}
+
+      {/* Total stress line */}
+      <path d={stressLine} stroke={PALETTE.text} strokeWidth={2} fill="none" />
+
+      {/* Legend */}
+      {channels.map((ch, i) => (
+        <g key={ch.label}>
+          <rect x={pad + i * 110} y={height - 18} width={10} height={10} fill={ch.color} opacity={0.7} />
+          <text x={pad + i * 110 + 14} y={height - 9} fill={PALETTE.sub} fontSize="10">{ch.label}</text>
+        </g>
+      ))}
+      <rect x={pad + channels.length * 110} y={height - 18} width={10} height={10} fill={PALETTE.text} opacity={0.7} />
+      <text x={pad + channels.length * 110 + 14} y={height - 9} fill={PALETTE.sub} fontSize="10">Total</text>
+
+      {/* Axes */}
+      <line x1={pad} y1={pad} x2={pad} y2={pad + H} stroke={PALETTE.grid} />
+      <line x1={pad} y1={pad + H} x2={pad + W} y2={pad + H} stroke={PALETTE.grid} />
+      <text x={4} y={pad + 6} fill={PALETTE.sub} fontSize="10">1.0</text>
+      <text x={4} y={toY(0.5) + 4} fill={PALETTE.sub} fontSize="10">0.5</text>
+      <text x={4} y={pad + H + 4} fill={PALETTE.sub} fontSize="10">0.0</text>
+      <text x={pad} y={pad + H + 14} fill={PALETTE.sub} fontSize="10">{tMin.toFixed(0)} s</text>
+      <text x={pad + W - 30} y={pad + H + 14} fill={PALETTE.sub} fontSize="10">{tMax.toFixed(0)} s</text>
+
+      {/* Title */}
+      <text x={pad} y={20} fill={PALETTE.text} fontSize="12" fontWeight="600">Stress composite (windowed)</text>
+      <text x={pad + 220} y={20} fill={PALETTE.sub} fontSize="10">
+        mean={stress.length > 0 ? (stress.reduce((a, b) => a + b, 0) / stress.length).toFixed(3) : "—"}
+        {" "}peak={stress.length > 0 ? Math.max(...stress).toFixed(3) : "—"}
+      </text>
     </svg>
   );
 }

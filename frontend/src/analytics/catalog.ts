@@ -31,6 +31,7 @@ export type ChartKind =
   | "tachogram"
   | "poincare"
   | "edr_respiration"
+  | "stress_timeline"
   | "gauge";
 
 export type AnalyticEntry = {
@@ -159,6 +160,28 @@ const NECESSARY: AnalyticEntry[] = [
       "The stress composite is experimental and not psychometrically validated; use it for within-session relative comparison, not as an absolute clinical measure.",
     references: [
       { apa: "Healey, J. A., & Picard, R. W. (2005). Detecting stress during real-world driving. IEEE TITS, 6, 156–166.", doi: "10.1109/TITS.2005.848368" },
+    ],
+  },
+  {
+    id: "ns-06-stress-timeline",
+    group: "necessary",
+    order: 6,
+    title: "Stress composite trajectory with channel contributions",
+    caption:
+      "The weighted stress composite plotted over the session in 60-second windows, with per-channel contribution stacking and reference bands for low, moderate, and elevated stress.",
+    chartKind: "stress_timeline",
+    dataPaths: ["extended.windowed.stress", "extended.windowed.hr_contribution", "extended.windowed.eda_contribution", "extended.windowed.hrv_contribution", "extended.windowed.rsa_contribution"],
+    whatItShows:
+      "A time-aligned area chart showing the stress composite score (0\u20131) across the session. The filled area is segmented by channel contribution: HR (green), EDA (amber), HRV deficit (red), and RSA deficit (purple) are stacked so their vertical extents sum to the total stress score at each window. Horizontal reference bands shade the background into three zones \u2014 low stress (0\u20130.25, green), moderate stress (0.25\u20130.50, none), and elevated stress (0.50+, red).",
+    howToRead:
+      "A flat trajectory near 0.3 means the participant maintained stable, moderate arousal throughout \u2014 typical for a seated resting protocol. A rising trajectory that peaks mid-session and falls in the final minutes is the habituation-then-recovery signature. A sharp spike at a specific time point flags a stressor onset; read the contributing channels at that spike to identify what drove it. If the RSA-deficit band expands while the HR band stays narrow, the stressor is producing vagal withdrawal without cardiac acceleration \u2014 a subtler stress response that HR alone would miss.",
+    architecturalMeaning:
+      "This is the summary chart a methods section should cite when claiming that a built-environment manipulation produced a stress response. A reviewer will want to see (a) that the stress trajectory changed at the onset of the manipulation and (b) that the change was driven by physiologically plausible channels rather than by a single noisy component. If stress is elevated only because one channel spiked while the others remained flat, the claim is weaker. If multiple channels co-activate at the transition, the multimodal convergence strengthens the inference. The reference bands provide rough anchoring: values below 0.25 are typical of comfortable rest, values above 0.50 indicate substantial sympathetic activation.",
+    caveats:
+      "The stress composite is experimental and not psychometrically validated. The 0.25/0.50 reference boundaries are heuristic, not derived from published norms. Use for within-session relative comparison only.",
+    references: [
+      { apa: "Healey, J. A., & Picard, R. W. (2005). Detecting stress during real-world driving. IEEE TITS, 6, 156\u2013166.", doi: "10.1109/TITS.2005.848368" },
+      { apa: "Schmidt, P., et al. (2018). Introducing WESAD, a multimodal dataset for wearable stress and affect detection. Proc. ICMI, 400\u2013408.", doi: "10.1145/3242969.3242985" },
     ],
   },
 ];
