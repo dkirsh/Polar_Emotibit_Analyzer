@@ -39,14 +39,14 @@ export const AnalyticDetailPage: React.FC = () => {
   const groupHref = `/results/${encodeURIComponent(sessionId)}/group/${a.group}`;
 
   return (
-    <main className="page" style={{ maxWidth: 960 }}>
-      <div style={{ marginBottom: 14, display: "flex", gap: 16, alignItems: "center", fontSize: 13 }}>
+    <main className="page" role="main" aria-label={`Analytic: ${a.title}`} style={{ maxWidth: 960 }}>
+      <nav aria-label="Breadcrumb" style={{ marginBottom: 14, display: "flex", gap: 16, alignItems: "center", fontSize: 13 }}>
         <Link to={`/results/${encodeURIComponent(session.session_id)}`} style={{ color: "#00C896" }}>Cover</Link>
         <span style={{ color: "#6B6B6B" }}>/</span>
         <Link to={groupHref} style={{ color: meta.hue }}>{meta.title}</Link>
         <span style={{ color: "#6B6B6B" }}>/</span>
         <span style={{ color: "#6B6B6B" }}>{String(a.order).padStart(2, "0")}</span>
-      </div>
+      </nav>
 
       {/* Title block — science-writer voice */}
       <header style={{ borderLeft: `3px solid ${meta.hue}`, paddingLeft: 18, marginBottom: 28 }}>
@@ -69,7 +69,7 @@ export const AnalyticDetailPage: React.FC = () => {
       </div>
 
       {/* Interpretation triplet */}
-      <section style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18, marginBottom: 22 }}>
+      <section aria-label="Interpretation" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18, marginBottom: 22 }}>
         <InterpretationBlock title="What this chart shows" hue={meta.hue}>
           {a.whatItShows}
         </InterpretationBlock>
@@ -113,7 +113,7 @@ export const AnalyticDetailPage: React.FC = () => {
       )}
 
       {/* Prev / next chaining within the group */}
-      <nav style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "stretch", marginTop: 30 }}>
+      <nav aria-label="Previous and next analytics" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "stretch", marginTop: 30 }}>
         {prev ? (
           <Link to={`/results/${encodeURIComponent(session.session_id)}/analytic/${prev.id}`} style={chainCard(meta.hue, "prev")}>
             <div style={chainLabel(meta.hue)}>← Previous in {meta.title}</div>

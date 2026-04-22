@@ -8,13 +8,13 @@ import { AnalyticDetailPage } from "./pages/AnalyticDetailPage";
 export const App: React.FC = () => {
   return (
     <BrowserRouter>
-      <div className="topbar">
+      <header className="topbar" role="banner">
         <h1>Polar-EmotiBit Analyzer</h1>
-        <nav className="topbar-nav">
+        <nav className="topbar-nav" aria-label="Global navigation">
           <Link to="/">New Analysis</Link>
           <a href="/docs" target="_blank" rel="noreferrer">API docs</a>
         </nav>
-      </div>
+      </header>
       <Routes>
         <Route path="/" element={<StartPage />} />
         <Route path="/results/:sessionId" element={<ResultsCoverPage />} />

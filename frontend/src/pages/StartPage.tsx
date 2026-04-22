@@ -114,11 +114,11 @@ export const StartPage: React.FC = () => {
   };
 
   return (
-    <main className="page">
+    <main className="page" role="main" aria-label="New analysis session">
       <div className="va-grid">
 
         {/* LEFT — Session metadata */}
-        <div className="card">
+        <section className="card" aria-label="Session metadata">
           <h2>Session Identity</h2>
           <div className="field">
             <label htmlFor="f-sess">Session ID<span className="req">*</span></label>
@@ -150,10 +150,10 @@ export const StartPage: React.FC = () => {
             <textarea id="f-notes" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)}
                       maxLength={500} placeholder="(optional, ≤ 500 chars)" />
           </div>
-        </div>
+        </section>
 
         {/* RIGHT — Uploads */}
-        <div className="card">
+        <section className="card" aria-label="File uploads">
           <h2>Upload Files</h2>
           {submitError && <div className="error-banner">Analysis failed: {submitError}</div>}
 
@@ -182,15 +182,16 @@ export const StartPage: React.FC = () => {
               `${info.n_rows} markers · codes: ${info.codes_present.join(", ")}${info.unknown_codes.length > 0 ? ` (unknown: ${info.unknown_codes.join(", ")})` : ""}`}
           />
 
-          <button className="submit-btn" disabled={!submitEnabled} onClick={onSubmit}>
+          <button className="submit-btn" disabled={!submitEnabled} onClick={onSubmit}
+                  aria-busy={submitting}>
             {submitting ? "Running pipeline…" : "Run Synchronization & Feature Extraction"}
           </button>
-        </div>
+        </section>
       </div>
 
       {/* Recent sessions footer */}
       {recent.length > 0 && (
-        <div className="recent-sessions">
+        <section className="recent-sessions" aria-label="Recent sessions">
           <h2 style={{ color: "#00C896", fontFamily: "Georgia, serif", fontSize: "1rem", marginBottom: 10 }}>
             Recent sessions
           </h2>
@@ -216,11 +217,11 @@ export const StartPage: React.FC = () => {
               ))}
             </tbody>
           </table>
-        </div>
+        </section>
       )}
 
       {submitting && (
-        <div className="loading-overlay">
+        <div className="loading-overlay" role="status" aria-live="polite">
           <div className="spinner">Running V2.1 pipeline — drift correction, synchronization, feature extraction…</div>
         </div>
       )}
@@ -253,6 +254,9 @@ function DropSlot<T>({
   return (
     <div
       className={className}
+      role="button"
+      tabIndex={0}
+      aria-label={`Upload ${label}`}
       onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
       onDragLeave={() => setDrag(false)}
       onDrop={(e) => {
@@ -267,6 +271,12 @@ function DropSlot<T>({
         input.accept = ".csv,text/csv";
         input.onchange = () => { if (input.files?.[0]) onFile(input.files[0]); };
         input.click();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          (e.currentTarget as HTMLDivElement).click();
+        }
       }}
       style={{ marginBottom: 14 }}
     >

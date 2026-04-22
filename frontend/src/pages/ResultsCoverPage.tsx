@@ -26,8 +26,8 @@ export const ResultsCoverPage: React.FC = () => {
   const band = r.sync_qc_band;
 
   return (
-    <main className="page">
-      <div className="identity-bar">
+    <main className="page" role="main" aria-label="Analysis results cover page">
+      <div className="identity-bar" role="banner" aria-label="Session identity">
         <div className="session-line">
           Session {session.session_id} · Subject {session.subject_id} · {session.session_date}
           {session.operator ? ` · ${session.operator}` : ""}
@@ -43,7 +43,7 @@ export const ResultsCoverPage: React.FC = () => {
         This analysis is organised into three reading layers. Read <b style={{ color: "#00C896" }}>Necessary Science Analytics</b> first: these are the five charts a research-grade HRV and EDA analysis is expected to defend. Read <b style={{ color: "#E8872A" }}>Diagnostic Analytics</b> before trusting any of the science — they report data quality, synchronisation cleanliness, and artifact load. <b style={{ color: "#8BA8D4" }}>Question-Driven Analytics</b> exist for specific research questions; open the list when your analysis plan needs an answer the primary charts do not deliver directly.
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 18 }}>
+      <nav aria-label="Analytic groups" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 18 }}>
         {(["necessary", "diagnostic", "question"] as const).map((g) => {
           const meta = GROUP_META[g];
           const count = g === "question"
@@ -53,6 +53,7 @@ export const ResultsCoverPage: React.FC = () => {
             <Link
               key={g}
               to={`/results/${encodeURIComponent(session.session_id)}/group/${g}`}
+              aria-label={`${meta.title}: ${count} analytics`}
               style={{
                 background: "#1E1E1E",
                 border: `1px solid #2F2F2F`,
@@ -65,7 +66,7 @@ export const ResultsCoverPage: React.FC = () => {
                 display: "block",
               }}
             >
-              <div style={{ fontSize: 22, color: meta.hue, marginBottom: 6 }}>{meta.icon}</div>
+              <div style={{ fontSize: 22, color: meta.hue, marginBottom: 6 }} aria-hidden="true">{meta.icon}</div>
               <h3 style={{ fontFamily: "Georgia, serif", fontSize: "1.1rem", color: meta.hue, marginBottom: 8 }}>{meta.title}</h3>
               <p style={{ fontSize: 13, color: "#B8B8B8", lineHeight: 1.5 }}>{meta.caption}</p>
               <div style={{ marginTop: 14, color: "#00C896", fontWeight: 600, fontSize: 13 }}>
@@ -74,18 +75,37 @@ export const ResultsCoverPage: React.FC = () => {
             </Link>
           );
         })}
-      </div>
+      </nav>
 
       {/* Quality flags — always visible on the cover */}
-      <div className="card" style={{ marginTop: 22 }}>
+      <section className="card" style={{ marginTop: 22 }} aria-label="Provenance flags">
         <h2>Provenance flags</h2>
-        <ul className="flags-list">
+        <ul className="flags-list" role="list">
           {r.quality_flags.map((f, i) => <li key={i}>{f}</li>)}
         </ul>
+      </section>
+
+      <div className="notice" style={{ marginTop: 18 }} role="note">
+        <b>Non-diagnostic notice.</b> {r.non_diagnostic_notice}
       </div>
 
-      <div className="notice" style={{ marginTop: 18 }}>
-        <b>Non-diagnostic notice.</b> {r.non_diagnostic_notice}
+      {/* Download extended analytics JSON — Probe 6 Step 15 fix */}
+      <div className="download-row" style={{ marginTop: 18 }}>
+        <button
+          className="download-btn"
+          aria-label="Download full analysis JSON"
+          onClick={() => {
+            const blob = new Blob([JSON.stringify(session, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${session.session_id}_analysis.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+        >
+          ↓ Download analysis JSON
+        </button>
       </div>
 
       <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
