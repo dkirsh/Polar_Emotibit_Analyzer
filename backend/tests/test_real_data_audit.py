@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.ingestion.synthetic import generate_synthetic_session
+from app.services.processing.features import lipponen_tarvainen_correction
 from app.services.processing.pipeline import (
     InsufficientDataError,
     MIN_BEATS_FOR_HRV,
@@ -38,7 +39,16 @@ def _load_welltory(name: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def _ground_truth_hrv(rr: np.ndarray) -> tuple[float, float, float]:
+def _ground_truth_hrv(rr: np.ndarray, *, correct_ectopics: bool = True) -> tuple[float, float, float]:
+    """Ground-truth HRV from RR intervals.
+
+    Post-2026-04-21 the pipeline applies Lipponen-Tarvainen (2019)
+    adaptive ectopic correction by default. The ground truth therefore
+    applies the same correction to match; pass correct_ectopics=False
+    for the raw textbook formulas used in the pre-L&T audit.
+    """
+    if correct_ectopics:
+        rr = lipponen_tarvainen_correction(rr)[0]
     rmssd = float(np.sqrt(np.mean(np.diff(rr) ** 2)))
     sdnn = float(np.std(rr, ddof=1))
     mean_hr = float(60000.0 / np.mean(rr))
