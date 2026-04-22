@@ -346,7 +346,7 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
     howToRead:
       "A negative d on HR with a significant trend p-value means HR decayed across the session — the canonical habituation signature. A positive d on HR with a significant trend means sensitization or accumulating load. A d near zero with a non-significant p means the participant's state was stable.",
     architecturalMeaning:
-      "Habituation within a session complicates architecture-cognition inference: a participant whose arousal decays over ten minutes of a stressful environment may be telling you the environment stopped stressing them or may be telling you they stopped paying attention to it. Reporting the habituation result explicitly is methodologically essential when comparing early-exposure and late-exposure responses.",
+      "Habituation within a session complicates architecture-cognition inference: a participant whose arousal decays over ten minutes may be telling you the environment stopped stressing them or that they stopped paying attention. If the d for HR is large and significant, confidence intervals on any late-session DV — stress recovery after an acoustic stressor, EDA response to a thermal gradient — widen because the baseline is no longer stationary. A paper reporting a daylight-restoration effect in the final five minutes of a ten-minute exposure must show this chart to prove the result was not confounded by a session-wide habituation trend.",
     references: [
       { apa: "Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate. JRSS-B, 57, 289–300." },
     ],
@@ -367,7 +367,7 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
     howToRead:
       "Tight positive coupling during a stressor is the sympathetic-integration signature. Decoupling during a rest phase but coupling during tasks suggests the environmental demand recruited both autonomic axes together. Persistent decoupling throughout means the two systems are acting on different inputs — worth a methodological check.",
     architecturalMeaning:
-      "Architecture-cognition experiments sometimes produce the puzzling result of 'stress shown in one channel but not the other'. This chart distinguishes between a true dissociation (different environmental perceptions driving different autonomic pathways) and a measurement-artifact dissociation (poor electrode adherence, motion bleed).",
+      "Architecture-cognition experiments sometimes produce the puzzling result of stress shown in one channel but not the other — HR rises during acoustic load but EDA stays flat, or EDA spikes at a crowding threshold while HR does not. If coupling is high throughout the stressor phase, the two channels corroborate each other and confidence intervals on the stress composite tighten. If coupling breaks down, the composite's intervals widen because contributions are contradictory; report the cardiac and electrodermal DVs separately rather than pooling them. This chart tells you which reporting strategy your data supports.",
     references: [
       { apa: "Berntson, G. G., et al. (1997). Heart rate variability: Origins, methods, and interpretive caveats. Psychophysiology, 34, 623–648.", doi: "10.1111/j.1469-8986.1997.tb02140.x" },
     ],
@@ -433,7 +433,7 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
     howToRead:
       "Coincidence between a flagged second and a spike in HR is the signature of motion artifact masquerading as physiology. Flagged seconds with no HR excursion are clean motion events that the gate caught without corrupting the primary signal.",
     architecturalMeaning:
-      "Useful in any protocol where the participant is asked to move — point-of-interest walking, door-opening tasks — to decide which HR excursions to treat as environmental responses and which to treat as motion-driven.",
+      "Useful in any protocol where the participant moves — point-of-interest walking, door-opening tasks, stair-climbing between conditions. If motion flags cluster at the same moments as HR spikes, confidence intervals on the stress and arousal DVs for those windows become unreliable. A clean timeline lets you report windowed features with full confidence; a contaminated one means the affected windows should be excluded or flagged in the methods section.",
     references: [
       { apa: "Kleckner, I. R., et al. (2018). Simple, transparent, and flexible automated quality assessment for ambulatory EDA. IEEE TBME, 65, 1460–1467.", doi: "10.1109/TBME.2017.2758643" },
     ],
@@ -452,7 +452,7 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
     whatItShows: "A residual plot showing how much each timestamp remained misaligned after correction.",
     howToRead: "Residuals that fan outward at the tails indicate uncorrected nonlinear drift; residuals that step-change at segment boundaries indicate poorly-placed breakpoints.",
     architecturalMeaning:
-      "A long-duration (>30 minute) experiment in a thermally-unstable setting (an outdoor walking study) is more likely to show temperature-dependent crystal drift; this chart is the confirmation that the piecewise correction caught it.",
+      "A long-duration (>30 minute) experiment in a thermally-unstable setting — an outdoor walking study, a poorly-conditioned atrium — is more likely to show temperature-dependent crystal drift. If residuals fan outward beyond ±3 SD at the session tails, the synchronization of HR and EDA timestamps degrades and any time-locked DV (stress onset latency, arousal decay constant) loses precision. This chart confirms that the piecewise correction caught the drift or warns you that it did not.",
   },
   {
     id: "q-d-04-ectopic-rate",
