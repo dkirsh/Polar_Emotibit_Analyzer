@@ -7,6 +7,7 @@ import {
   getAnalytic,
 } from "../analytics/catalog";
 import { ChartRenderer } from "../analytics/ChartRenderer";
+import { annotateGlossaryTerms } from "../analytics/util";
 
 /**
  * Analytic detail page — the full presentation for a single analytic.
@@ -68,25 +69,29 @@ export const AnalyticDetailPage: React.FC = () => {
         <ChartRenderer kind={a.chartKind} session={session} width={920} height={360} />
       </div>
 
-      {/* Interpretation triplet */}
+      {/* Interpretation triplet. Glossary terms in each prose block
+          surface as dotted-underline hover tooltips on first occurrence;
+          the helper at annotateGlossaryTerms matches the 35-term
+          glossary so readers can look up jargon without leaving the
+          page. */}
       <section aria-label="Interpretation" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18, marginBottom: 22 }}>
         <InterpretationBlock title="What this chart shows" hue={meta.hue}>
-          {a.whatItShows}
+          {annotateGlossaryTerms(a.whatItShows)}
         </InterpretationBlock>
         <InterpretationBlock title="How to read it" hue={meta.hue}>
-          {a.howToRead}
+          {annotateGlossaryTerms(a.howToRead)}
         </InterpretationBlock>
         <InterpretationBlock title="What it means for cognitive neuroscience of architecture" hue={meta.hue}>
-          {a.architecturalMeaning}
+          {annotateGlossaryTerms(a.architecturalMeaning)}
         </InterpretationBlock>
         {a.caveats && (
           <InterpretationBlock title="Caveat" hue="#E8872A">
-            {a.caveats}
+            {annotateGlossaryTerms(a.caveats)}
           </InterpretationBlock>
         )}
         {a.scienceNote && (
           <InterpretationBlock title="Science rationale" hue="#A78BFA">
-            {a.scienceNote}
+            {annotateGlossaryTerms(a.scienceNote)}
           </InterpretationBlock>
         )}
       </section>
