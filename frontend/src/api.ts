@@ -87,6 +87,9 @@ export type WindowedFeatures = {
   hr_contribution: number[];
   eda_contribution: number[];
   hrv_contribution: number[];
+  mean_rpm: Array<number | null>;
+  rsa_amplitude: Array<number | null>;
+  rsa_contribution: number[];
 };
 
 export type SpectralTrajectory = {

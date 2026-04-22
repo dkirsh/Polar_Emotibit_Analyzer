@@ -29,7 +29,7 @@ from app.services.processing.extended_analytics import (
     compute_windowed_features,
     decompose_stress,
 )
-from app.services.processing.features import _get_rr_intervals
+from app.services.processing.features import _get_rr_intervals, compute_edr
 from app.services.processing.kubios_benchmark import compare_with_kubios
 from app.services.processing.pipeline import run_analysis
 from app.services.processing.statistics import compute_inference_summary, compute_summary_stats
@@ -140,9 +140,15 @@ async def analyze(
         synced = synchronize_signals(em_df, corrected)
         cleaned, _mar = clean_signals(synced)
 
+        # Compute session-level EDR for the decomposition
+        session_edr = compute_edr(cleaned)
+        session_rsa = session_edr["rsa_amplitude"]
+        has_rsa = session_rsa is not None
+
         fs = result.feature_summary
         decomp = decompose_stress(
             fs.rmssd_ms, fs.mean_hr_bpm, fs.eda_mean_us, fs.eda_phasic_index,
+            rsa_amplitude=session_rsa,
         )
         wf = compute_windowed_features(cleaned, window_s=60.0, step_s=30.0)
         st = compute_spectral_trajectory(cleaned, window_s=120.0, step_s=60.0)
@@ -151,16 +157,22 @@ async def analyze(
         summ = compute_summary_stats(cleaned)
         inf = compute_inference_summary(cleaned) if len(cleaned) >= 10 else None
 
+        # Build stress decomposition components list
+        stress_components = [
+            {"name": "HR", "component": decomp.hr_component, "contribution": decomp.hr_contribution, "weight": 0.25 if has_rsa else 0.30},
+            {"name": "EDA_tonic", "component": decomp.eda_component, "contribution": decomp.eda_contribution, "weight": 0.25 if has_rsa else 0.30},
+            {"name": "EDA_phasic", "component": decomp.phasic_component, "contribution": decomp.phasic_contribution, "weight": 0.15 if has_rsa else 0.20},
+            {"name": "HRV_deficit", "component": 1.0 - decomp.hrv_protection, "contribution": decomp.hrv_contribution, "weight": 0.15 if has_rsa else 0.20},
+        ]
+        if has_rsa:
+            stress_components.append(
+                {"name": "RSA_deficit", "component": 1.0 - decomp.rsa_component, "contribution": decomp.rsa_contribution, "weight": 0.20}
+            )
         extended = {
             "stress_decomposition": {
                 "total": decomp.total_score,
                 "dominant_driver": decomp.dominant_driver,
-                "components": [
-                    {"name": "HR", "component": decomp.hr_component, "contribution": decomp.hr_contribution, "weight": 0.35},
-                    {"name": "EDA_tonic", "component": decomp.eda_component, "contribution": decomp.eda_contribution, "weight": 0.35},
-                    {"name": "EDA_phasic", "component": decomp.phasic_component, "contribution": decomp.phasic_contribution, "weight": 0.20},
-                    {"name": "HRV_deficit", "component": 1.0 - decomp.hrv_protection, "contribution": decomp.hrv_contribution, "weight": 0.10},
-                ],
+                "components": stress_components,
             },
             "windowed": {
                 "t_s": wf.window_centers_s,
@@ -172,6 +184,9 @@ async def analyze(
                 "hr_contribution": wf.hr_contribution,
                 "eda_contribution": wf.eda_contribution,
                 "hrv_contribution": wf.hrv_contribution,
+                "mean_rpm": wf.mean_rpm,
+                "rsa_amplitude": wf.rsa_amplitude,
+                "rsa_contribution": wf.rsa_contribution,
             },
             "spectral_trajectory": {
                 "t_s": st.window_centers_s,

@@ -30,6 +30,7 @@ export type ChartKind =
   | "strip"
   | "tachogram"
   | "poincare"
+  | "edr_respiration"
   | "gauge";
 
 export type AnalyticEntry = {
@@ -473,6 +474,28 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
       "The temporal distribution of ectopic beats is load-bearing for architecture-cognition claims that turn on a specific phase transition — the exact moment the participant entered a crowded zone, the first bar of an acoustic stimulus, the step across a daylight threshold. A paper reporting a stress increase at task onset (an RMSSD drop) or an arousal increase at an acoustic onset (an EDA-tonic lift coincident with HR elevation) has a defensible claim only if the ectopic timeline shows no corresponding burst of detection failures at that same moment; otherwise the autonomic response the paper attributes to the environmental manipulation is partly an artefact of the participant's movement at the transition. For seated protocols (acoustic load without locomotion, thermal gradient in a stationary chair, daylight manipulation under fixed head posture) a near-zero ectopic rate throughout is the baseline expectation and a cluster coincident with the stress or arousal signal is suspicious. For walking protocols the expectation inverts — ectopics at transition moments are predictable and must be excluded from the windowed-feature analysis that the stress and recovery DVs derive from, rather than left to corrupt them.",
     references: [
       { apa: "Lipponen, J. A., & Tarvainen, M. P. (2019). A robust algorithm for HRV time-series artefact correction. JMET, 43, 173–181.", doi: "10.1080/03091902.2019.1640306" },
+    ],
+  },
+  {
+    id: "q-s-07-edr-respiration",
+    group: "question",
+    category: "science",
+    question: "What is the participant's breathing pattern, and does it track arousal?",
+    order: 7,
+    title: "ECG-derived respiration rate and RSA amplitude over time",
+    caption:
+      "Breathing rate (RPM) and respiratory sinus arrhythmia amplitude extracted from beat-to-beat RR intervals, displayed in 60-second sliding windows.",
+    chartKind: "edr_respiration",
+    dataPaths: ["extended.windowed.mean_rpm", "extended.windowed.rsa_amplitude"],
+    whatItShows:
+      "Two time-aligned line plots: the upper panel shows estimated breathing rate in breaths per minute (RPM), the lower panel shows RSA amplitude — the magnitude of the respiratory modulation of heart rate. Both are computed per 60-second window from the Polar H10's RR intervals using a bandpass filter at 0.15–0.40 Hz.",
+    howToRead:
+      "A breathing rate between 12 and 20 RPM is typical at rest. A sudden increase suggests hyperventilation or exertion; a drop may indicate relaxation or breath-holding. RSA amplitude tracks vagal tone: higher values indicate stronger parasympathetic modulation (calm), while a drop in RSA during a stressor is the canonical vagal-withdrawal signature. If both RPM rises and RSA drops simultaneously, the participant is under sympathetic activation.",
+    architecturalMeaning:
+      "Respiration was the single strongest predictor of stress in the WESAD benchmark (Schmidt et al., 2018, importance=0.35). In architecture-cognition protocols, RSA amplitude drops predict environmental stressors — acoustic load, spatial compression, crowding — more reliably than HR alone because RSA is not confounded by locomotion. A daylight-restoration study showing RSA recovery during the intervention phase has a stronger vagal-rebound claim than one reporting HR alone. If RSA stays flat while HR drops, the HR change may reflect cardiovascular conditioning rather than parasympathetic re-engagement.",
+    references: [
+      { apa: "Schmidt, P., et al. (2018). Introducing WESAD, a multimodal dataset for wearable stress and affect detection. Proc. ICMI, 400–408.", doi: "10.1145/3242969.3242985" },
+      { apa: "Berntson, G. G., et al. (1997). Heart rate variability: Origins, methods, and interpretive caveats. Psychophysiology, 34, 623–648.", doi: "10.1111/j.1469-8986.1997.tb02140.x" },
     ],
   },
 ];

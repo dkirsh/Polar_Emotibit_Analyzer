@@ -30,6 +30,7 @@ const PALETTE = {
   good: "#1A7050",
   warn: "#B8821A",
   bad: "#B83A4A",
+  resp: "#A78BFA",  // purple for respiratory channel
 };
 
 export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, height = 340 }) => {
@@ -61,6 +62,8 @@ export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, hei
       return <BandDurationGauge session={session} width={width} />;
     case "forest":
       return <ForestPlot session={session} width={width} height={height} />;
+    case "edr_respiration":
+      return <EDRRespiration session={session} width={width} height={height} />;
     case "phase_comparison":
     case "bland_altman":
     default:
@@ -111,7 +114,7 @@ function StressDecompositionBar({ session, width, height }: { session: StoredSes
   if (!d) return <Empty msg="No decomposition available" />;
   const comps = d.components;
   const total = d.total;
-  const colors = ["#00C896", "#E8872A", "#F5A623", "#B83A4A"];
+  const colors = ["#00C896", "#E8872A", "#F5A623", "#B83A4A", "#A78BFA"];
   const bar = height - 80;
   let x = 40;
   const scale = (width - 80);
@@ -461,6 +464,80 @@ function Placeholder({ kind, session: _ }: { kind: ChartKind; session: StoredSes
 
 function Empty({ msg }: { msg: string }) {
   return <div style={{ background: PALETTE.bg, padding: 28, color: PALETTE.sub, textAlign: "center" }}>{msg}</div>;
+}
+
+function EDRRespiration({ session, width, height }: { session: StoredSession; width: number; height: number }) {
+  const w = session.extended?.windowed;
+  if (!w || w.t_s.length < 2) return <Empty msg="Not enough windows for respiration trace" />;
+
+  const rpm = w.mean_rpm;
+  const rsa = w.rsa_amplitude;
+  const t = w.t_s;
+
+  // Filter out nulls for scaling
+  const validRpm = rpm.filter((v): v is number => v != null);
+  const validRsa = rsa.filter((v): v is number => v != null);
+  if (validRpm.length < 2 && validRsa.length < 2) return <Empty msg="EDR could not be computed (recording too short or too few beats)" />;
+
+  const pad = 40;
+  const W = width - pad * 2;
+  const hPanel = (height - pad * 2 - 20) / 2;  // Two equal panels with a gap
+  const tMin = t[0], tMax = t[t.length - 1];
+  const toX = (tv: number) => pad + ((tv - tMin) / (tMax - tMin || 1)) * W;
+
+  // RPM panel (top)
+  const rpmMin = validRpm.length > 0 ? Math.min(...validRpm) * 0.9 : 0;
+  const rpmMax = validRpm.length > 0 ? Math.max(...validRpm) * 1.1 : 30;
+  const toYRpm = (v: number) => pad + ((rpmMax - v) / (rpmMax - rpmMin || 1)) * hPanel;
+  const rpmSegs: string[] = [];
+  let curSeg = "";
+  for (let i = 0; i < t.length; i++) {
+    if (rpm[i] == null) { if (curSeg) { rpmSegs.push(curSeg); curSeg = ""; } continue; }
+    const cmd = `${!curSeg ? "M" : "L"}${toX(t[i]).toFixed(1)},${toYRpm(rpm[i]!).toFixed(1)}`;
+    curSeg = curSeg ? curSeg + " " + cmd : cmd;
+  }
+  if (curSeg) rpmSegs.push(curSeg);
+
+  // RSA panel (bottom)
+  const rsaTop = pad + hPanel + 20;
+  const rsaMin = validRsa.length > 0 ? Math.min(...validRsa) * 0.9 : 0;
+  const rsaMax = validRsa.length > 0 ? Math.max(...validRsa) * 1.1 : 30;
+  const toYRsa = (v: number) => rsaTop + ((rsaMax - v) / (rsaMax - rsaMin || 1)) * hPanel;
+  const rsaSegs: string[] = [];
+  curSeg = "";
+  for (let i = 0; i < t.length; i++) {
+    if (rsa[i] == null) { if (curSeg) { rsaSegs.push(curSeg); curSeg = ""; } continue; }
+    const cmd = `${!curSeg ? "M" : "L"}${toX(t[i]).toFixed(1)},${toYRsa(rsa[i]!).toFixed(1)}`;
+    curSeg = curSeg ? curSeg + " " + cmd : cmd;
+  }
+  if (curSeg) rsaSegs.push(curSeg);
+
+  // Normal breathing band (12-20 RPM)
+  const rpmBandTop = toYRpm(Math.min(20, rpmMax));
+  const rpmBandBot = toYRpm(Math.max(12, rpmMin));
+
+  return (
+    <svg width={width} height={height} role="img" aria-label="ECG-derived respiration">
+      <rect width={width} height={height} fill={PALETTE.bg} />
+      {/* RPM panel */}
+      <text x={pad} y={pad - 8} fill={PALETTE.resp} fontSize="12" fontWeight="600">Breathing rate (RPM)</text>
+      <rect x={pad} y={rpmBandTop} width={W} height={Math.max(0, rpmBandBot - rpmBandTop)} fill={PALETTE.resp} opacity={0.08} />
+      <text x={pad + W - 100} y={rpmBandTop + 14} fill={PALETTE.sub} fontSize="10">12–20 RPM normal</text>
+      {rpmSegs.map((path, i) => <path key={`rpm-${i}`} d={path} stroke={PALETTE.resp} strokeWidth={2} fill="none" />)}
+      <text x={6} y={pad + 6} fill={PALETTE.sub} fontSize="10">{rpmMax.toFixed(0)}</text>
+      <text x={6} y={pad + hPanel} fill={PALETTE.sub} fontSize="10">{rpmMin.toFixed(0)}</text>
+      <line x1={pad} y1={pad + hPanel} x2={pad + W} y2={pad + hPanel} stroke={PALETTE.grid} />
+      {/* RSA panel */}
+      <text x={pad} y={rsaTop - 8} fill={PALETTE.hr} fontSize="12" fontWeight="600">RSA amplitude (vagal tone proxy)</text>
+      {rsaSegs.map((path, i) => <path key={`rsa-${i}`} d={path} stroke={PALETTE.hr} strokeWidth={2} fill="none" />)}
+      <text x={6} y={rsaTop + 6} fill={PALETTE.sub} fontSize="10">{rsaMax.toFixed(1)}</text>
+      <text x={6} y={rsaTop + hPanel} fill={PALETTE.sub} fontSize="10">{rsaMin.toFixed(1)}</text>
+      <line x1={pad} y1={rsaTop + hPanel} x2={pad + W} y2={rsaTop + hPanel} stroke={PALETTE.grid} />
+      {/* Time axis */}
+      <text x={pad} y={height - 5} fill={PALETTE.sub} fontSize="10">{tMin.toFixed(0)} s</text>
+      <text x={pad + W - 40} y={height - 5} fill={PALETTE.sub} fontSize="10">{tMax.toFixed(0)} s</text>
+    </svg>
+  );
 }
 
 const cellHead: React.CSSProperties = { textAlign: "left", padding: "8px 10px", color: PALETTE.hr, borderBottom: `1px solid ${PALETTE.grid}`, fontWeight: 600 };

@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 from scipy.signal import welch as scipy_welch
 
-from app.services.processing.features import _get_rr_intervals
+from app.services.processing.features import _get_rr_intervals, compute_edr
 from app.services.processing.stress import compute_stress_score
 
 
@@ -62,6 +62,8 @@ class StressDecomposition:
     hrv_protection: float = 0.0
     hrv_contribution: float = 0.0     # (1-hrv_protection) * weight
     dominant_driver: str = ""           # which channel contributes most
+    rsa_component: float = 0.0
+    rsa_contribution: float = 0.0
 
 
 def decompose_stress(
@@ -69,6 +71,7 @@ def decompose_stress(
     mean_hr_bpm: float,
     eda_mean_us: float,
     eda_phasic_index: float,
+    rsa_amplitude: float | None = None,
 ) -> StressDecomposition:
     """Decompose stress score into channel-level contributions.
 
@@ -82,12 +85,22 @@ def decompose_stress(
     phasic_c = max(0.0, min(1.0, eda_phasic_index / 2.5))
     hrv_prot = min(rmssd_ms, 80.0) / 80.0
 
-    hr_contrib = 0.35 * hr_c
-    eda_contrib = 0.35 * eda_c
-    phasic_contrib = 0.20 * phasic_c
-    hrv_contrib = 0.10 * (1.0 - hrv_prot)
+    if rsa_amplitude is not None:
+        rsa_c = min(rsa_amplitude, 30.0) / 30.0
+        hr_contrib = 0.25 * hr_c
+        eda_contrib = 0.25 * eda_c
+        phasic_contrib = 0.15 * phasic_c
+        hrv_contrib = 0.15 * (1.0 - hrv_prot)
+        rsa_contrib = 0.20 * (1.0 - rsa_c)
+    else:
+        rsa_c = 0.0
+        hr_contrib = 0.30 * hr_c
+        eda_contrib = 0.30 * eda_c
+        phasic_contrib = 0.20 * phasic_c
+        hrv_contrib = 0.20 * (1.0 - hrv_prot)
+        rsa_contrib = 0.0
 
-    total = hr_contrib + eda_contrib + phasic_contrib + hrv_contrib
+    total = hr_contrib + eda_contrib + phasic_contrib + hrv_contrib + rsa_contrib
     total = max(0.0, min(1.0, total))
 
     contributions = {
@@ -95,6 +108,7 @@ def decompose_stress(
         "EDA_tonic": eda_contrib,
         "EDA_phasic": phasic_contrib,
         "HRV_deficit": hrv_contrib,
+        "RSA_deficit": rsa_contrib,
     }
     dominant = max(contributions, key=contributions.get)
 
@@ -109,6 +123,8 @@ def decompose_stress(
         hrv_protection=hrv_prot,
         hrv_contribution=hrv_contrib,
         dominant_driver=dominant,
+        rsa_component=rsa_c,
+        rsa_contribution=rsa_contrib,
     )
 
 
@@ -129,6 +145,10 @@ class WindowedFeatures:
     hr_contribution: list[float] = field(default_factory=list)
     eda_contribution: list[float] = field(default_factory=list)
     hrv_contribution: list[float] = field(default_factory=list)
+    # Respiratory features per window (from ECG-Derived Respiration)
+    mean_rpm: list[float | None] = field(default_factory=list)
+    rsa_amplitude: list[float | None] = field(default_factory=list)
+    rsa_contribution: list[float] = field(default_factory=list)
 
 
 def compute_windowed_features(
@@ -188,8 +208,12 @@ def compute_windowed_features(
         # Phasic EDA in this window
         phasic = float(np.mean(np.abs(np.diff(eda)))) if len(eda) > 1 else 0.0
 
-        # Stress decomposition
-        decomp = decompose_stress(rmssd_val, mean_hr, mean_eda, phasic)
+        # ECG-Derived Respiration in this window
+        edr = compute_edr(chunk)
+        rsa_amp = edr["rsa_amplitude"]
+
+        # Stress decomposition (now includes respiratory channel)
+        decomp = decompose_stress(rmssd_val, mean_hr, mean_eda, phasic, rsa_amp)
 
         result.window_centers_s.append(float((center - t_start) / 1000))
         result.hr_mean.append(mean_hr)
@@ -200,6 +224,9 @@ def compute_windowed_features(
         result.hr_contribution.append(decomp.hr_contribution)
         result.eda_contribution.append(decomp.eda_contribution)
         result.hrv_contribution.append(decomp.hrv_contribution)
+        result.mean_rpm.append(edr["mean_rpm"])
+        result.rsa_amplitude.append(rsa_amp)
+        result.rsa_contribution.append(decomp.rsa_contribution)
 
         center += step_ms
 
