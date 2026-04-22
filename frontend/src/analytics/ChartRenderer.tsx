@@ -11,6 +11,7 @@
 import React from "react";
 import { ChartKind } from "./catalog";
 import { StoredSession } from "../api";
+import { safe } from "./util";
 
 type Props = {
   kind: ChartKind;
@@ -66,7 +67,6 @@ export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, hei
       return <EDRRespiration session={session} width={width} height={height} />;
     case "stress_timeline":
       return <StressTimeline session={session} width={width} height={height} />;
-    case "phase_comparison":
     case "bland_altman":
     default:
       return <Placeholder kind={kind} session={session} />;
@@ -76,7 +76,16 @@ export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, hei
 // ---------------- Charts ----------------
 
 function TimeseriesOverlay({ session, width, height }: { session: StoredSession; width: number; height: number }) {
-  const pts = session.extended?.cleaned_timeseries ?? [];
+  // Filter out any point whose hr_bpm, eda_us, or timestamp_ms is
+  // null / NaN / ±Infinity — these would otherwise propagate into
+  // Math.min / Math.max and produce NaN SVG coordinates.
+  const ptsRaw = session.extended?.cleaned_timeseries ?? [];
+  const pts = ptsRaw.filter(
+    (p) =>
+      safe(p.timestamp_ms as number | null | undefined) !== null &&
+      safe(p.hr_bpm as number | null | undefined) !== null &&
+      safe(p.eda_us as number | null | undefined) !== null,
+  );
   if (pts.length < 2) return <Empty msg="Not enough timeseries data" />;
   const t0 = pts[0].timestamp_ms!;
   const t1 = pts[pts.length - 1].timestamp_ms!;
@@ -251,16 +260,27 @@ function PoincarePlot({ session, width, height }: { session: StoredSession; widt
   if (rr.length < 10) return <Empty msg="Not enough beats for Poincaré" />;
   const pairs = rr.slice(0, -1).map((v, i) => [v, rr[i + 1]]);
   const all = pairs.flat();
-  const vMin = Math.min(...all) * 0.95, vMax = Math.max(...all) * 1.05;
+  const vMin = Math.min(...all) * 0.95;
+  const vMax = Math.max(...all) * 1.05;
   const pad = 40;
   const sz = Math.min(width, height) - pad * 2;
   const toX = (v: number) => pad + ((v - vMin) / (vMax - vMin)) * sz;
   const toY = (v: number) => pad + sz - ((v - vMin) / (vMax - vMin)) * sz;
   const mean = all.reduce((a, b) => a + b, 0) / all.length;
-  const sd1 = Math.sqrt(pairs.reduce((s, [a, b]) => s + Math.pow((b - a), 2), 0) / (2 * pairs.length));
-  const sd2 = Math.sqrt(pairs.reduce((s, [a, b]) => s + Math.pow((a + b - 2 * mean), 2), 0) / (2 * pairs.length));
+
+  // Prefer backend-computed SD1 / SD2 / ratio / ellipse area when
+  // available (Brennan et al. 2001 closed form, computed on the
+  // L&T-corrected RR series in features.py). Fall back to local
+  // recomputation when the fields are missing — e.g. on older
+  // analysis payloads.
+  const fs = session.result.feature_summary;
+  const sd1 = safe(fs.sd1_ms) ?? Math.sqrt(pairs.reduce((s, [a, b]) => s + Math.pow((b - a), 2), 0) / (2 * pairs.length));
+  const sd2 = safe(fs.sd2_ms) ?? Math.sqrt(pairs.reduce((s, [a, b]) => s + Math.pow((a + b - 2 * mean), 2), 0) / (2 * pairs.length));
+  const ratio = safe(fs.sd1_sd2_ratio) ?? (sd2 > 0 ? sd1 / sd2 : null);
+  const ellipseArea = safe(fs.ellipse_area_ms2) ?? Math.PI * sd1 * sd2;
+
   return (
-    <svg width={width} height={height} role="img" aria-label="Poincaré plot">
+    <svg width={width} height={height} role="img" aria-label="Poincaré plot with SD1/SD2 ellipse">
       <rect width={width} height={height} fill={PALETTE.bg} />
       <line x1={toX(vMin)} y1={toY(vMin)} x2={toX(vMax)} y2={toY(vMax)} stroke={PALETTE.grid} strokeDasharray="3,3" />
       {pairs.map(([a, b], i) => (
@@ -276,7 +296,32 @@ function PoincarePlot({ session, width, height }: { session: StoredSession; widt
         strokeWidth={1.5}
         fill="none"
       />
-      <text x={pad} y={20} fill={PALETTE.text} fontSize="12">SD1 = {sd1.toFixed(1)} ms · SD2 = {sd2.toFixed(1)} ms</text>
+      {/* SD1 axis (perpendicular to identity line) */}
+      <line
+        x1={toX(mean) + (-sd1 / (vMax - vMin)) * sz * Math.SQRT1_2}
+        y1={toY(mean) + (-sd1 / (vMax - vMin)) * sz * Math.SQRT1_2}
+        x2={toX(mean) + (sd1 / (vMax - vMin)) * sz * Math.SQRT1_2}
+        y2={toY(mean) + (sd1 / (vMax - vMin)) * sz * Math.SQRT1_2}
+        stroke="#A78BFA"
+        strokeWidth={1}
+        strokeDasharray="2,2"
+      />
+      {/* SD2 axis (along identity line) */}
+      <line
+        x1={toX(mean) + (-sd2 / (vMax - vMin)) * sz * Math.SQRT1_2}
+        y1={toY(mean) + (sd2 / (vMax - vMin)) * sz * Math.SQRT1_2}
+        x2={toX(mean) + (sd2 / (vMax - vMin)) * sz * Math.SQRT1_2}
+        y2={toY(mean) + (-sd2 / (vMax - vMin)) * sz * Math.SQRT1_2}
+        stroke="#4A6FA8"
+        strokeWidth={1}
+        strokeDasharray="2,2"
+      />
+      <text x={pad} y={20} fill={PALETTE.text} fontSize="12" fontWeight="600">
+        SD1 = {sd1.toFixed(1)} ms · SD2 = {sd2.toFixed(1)} ms
+      </text>
+      <text x={pad} y={36} fill={PALETTE.sub} fontSize="11">
+        SD1/SD2 = {ratio !== null ? ratio.toFixed(3) : "—"} · ellipse area = {ellipseArea.toFixed(0)} ms²
+      </text>
       <text x={pad} y={pad + sz + 14} fill={PALETTE.sub} fontSize="10">RR(n) (ms)</text>
       <text x={6} y={pad + 4} fill={PALETTE.sub} fontSize="10">RR(n+1)</text>
     </svg>
