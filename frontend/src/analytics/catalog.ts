@@ -48,6 +48,8 @@ export type AnalyticEntry = {
   howToRead: string;          // how to interpret the visual encoding
   architecturalMeaning: string; // what it means for cog-neuro-of-architecture
   caveats?: string;           // common misinterpretations to avoid
+  scienceNote?: string;       // deeper science rationale (e.g., why RSA predicts stress)
+  calibrationGuide?: string;  // formula, instructions, or next-step task
   references?: Array<{ apa: string; doi?: string }>;
 };
 
@@ -493,9 +495,55 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
       "A breathing rate between 12 and 20 RPM is typical at rest. A sudden increase suggests hyperventilation or exertion; a drop may indicate relaxation or breath-holding. RSA amplitude tracks vagal tone: higher values indicate stronger parasympathetic modulation (calm), while a drop in RSA during a stressor is the canonical vagal-withdrawal signature. If both RPM rises and RSA drops simultaneously, the participant is under sympathetic activation.",
     architecturalMeaning:
       "Respiration was the single strongest predictor of stress in the WESAD benchmark (Schmidt et al., 2018, importance=0.35). In architecture-cognition protocols, RSA amplitude drops predict environmental stressors — acoustic load, spatial compression, crowding — more reliably than HR alone because RSA is not confounded by locomotion. A daylight-restoration study showing RSA recovery during the intervention phase has a stronger vagal-rebound claim than one reporting HR alone. If RSA stays flat while HR drops, the HR change may reflect cardiovascular conditioning rather than parasympathetic re-engagement.",
+    scienceNote:
+      "Respiratory sinus arrhythmia (RSA) is the beat-to-beat variation in heart rate driven by breathing: HR accelerates during inhalation and decelerates during exhalation. This oscillation is mediated by the vagus nerve and is the physiological basis for the high-frequency (0.15–0.40 Hz) component of heart rate variability. When the sympathetic nervous system activates under stress, vagal tone is withdrawn — breathing becomes shallower and faster, and the RSA modulation amplitude drops. This makes RSA a direct, real-time index of parasympathetic withdrawal that is not confounded by locomotion (unlike HR, which rises during walking regardless of stress) or by electrode adherence (unlike EDA, which drops when the skin dries). In the WESAD benchmark, features derived from respiration — particularly breathing rate variability and the amplitude of the respiratory oscillation in the RR tachogram — carried more discriminative power for binary stress classification (importance = 0.35) than heart rate (0.20) or electrodermal activity (~0.12). Healey & Picard (2005) independently confirmed that HR and EDA together reach 97% accuracy for stress detection, but that accuracy improves further when respiration is added as a third channel. For the Polar H10, which does not carry a dedicated respiratory sensor, we extract respiration from the RR intervals via ECG-Derived Respiration (EDR): a 4th-order Butterworth bandpass at 0.15–0.40 Hz applied to the interpolated RR timeseries, with peak detection to estimate instantaneous breathing rate and RSA amplitude per window.",
+    calibrationGuide:
+      "CURRENT FORMULA (V2.2 — 5-channel, WESAD-informed heuristic)\n"
+      + "  stress = 0.25 × HR_norm + 0.25 × EDA_norm + 0.15 × phasic_norm\n"
+      + "           + 0.15 × (1 − HRV_protection) + 0.20 × (1 − RSA_norm)\n"
+      + "\n"
+      + "  HR_norm       = clip((mean_hr − 60) / 60, 0, 1)\n"
+      + "  EDA_norm      = clip(mean_eda / 20, 0, 1)\n"
+      + "  phasic_norm   = clip(phasic_index / 2.5, 0, 1)\n"
+      + "  HRV_protection = min(rmssd, 80) / 80\n"
+      + "  RSA_norm      = min(rsa_amplitude, 30) / 30\n"
+      + "\n"
+      + "  If RSA is unavailable, falls back to 4-channel mode:\n"
+      + "    HR=0.30, EDA=0.30, phasic=0.20, HRV=0.20\n"
+      + "\n"
+      + "CALIBRATION TODO — replace heuristic weights with WESAD-derived weights\n"
+      + "─────────────────────────────────────────────────────────────────────────\n"
+      + "1. Download the WESAD dataset (15 subjects, ~18 GB):\n"
+      + "     https://uni-siegen.sciebo.de/s/HGdUkoNlW1Ub0Gx\n"
+      + "   or: https://archive.ics.uci.edu/dataset/465/wesad\n"
+      + "\n"
+      + "2. Extract the S2/–S17/ directories (skip S12, which was excluded\n"
+      + "   by Schmidt et al.) into a single folder.\n"
+      + "\n"
+      + "3. Run the derivation script (requires scikit-learn, scipy):\n"
+      + "     python scripts/derive_stress_weights_wesad.py \\\n"
+      + "       --data-dir /path/to/WESAD \\\n"
+      + "       --output scripts/wesad_derived_weights.json\n"
+      + "\n"
+      + "4. The script extracts 60-second windows from each subject, computes\n"
+      + "   the same 5 normalized features this pipeline uses, and fits a\n"
+      + "   logistic regression (L2, leave-one-subject-out cross-validation).\n"
+      + "   It outputs:\n"
+      + "     • Normalized absolute coefficients as channel weights\n"
+      + "     • Cross-validated accuracy (expected ~90%+)\n"
+      + "     • Comparison against the current heuristic weights\n"
+      + "\n"
+      + "5. Replace the weights in backend/app/services/processing/stress.py\n"
+      + "   with the derived values. Update the module docstring to cite\n"
+      + "   'weights derived from WESAD via logistic regression' instead of\n"
+      + "   'heuristic'. Commit with the JSON output as provenance.\n"
+      + "\n"
+      + "Estimated time: 2–4 hours (download + extraction + script run).\n"
+      + "The WESAD dataset is freely available for research use.",
     references: [
       { apa: "Schmidt, P., et al. (2018). Introducing WESAD, a multimodal dataset for wearable stress and affect detection. Proc. ICMI, 400–408.", doi: "10.1145/3242969.3242985" },
       { apa: "Berntson, G. G., et al. (1997). Heart rate variability: Origins, methods, and interpretive caveats. Psychophysiology, 34, 623–648.", doi: "10.1111/j.1469-8986.1997.tb02140.x" },
+      { apa: "Healey, J. A., & Picard, R. W. (2005). Detecting stress during real-world driving tasks using physiological sensors. IEEE TITS, 6(2), 156–166.", doi: "10.1109/TITS.2005.848368" },
     ],
   },
 ];

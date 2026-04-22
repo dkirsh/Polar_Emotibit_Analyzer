@@ -84,7 +84,24 @@ export const AnalyticDetailPage: React.FC = () => {
             {a.caveats}
           </InterpretationBlock>
         )}
+        {a.scienceNote && (
+          <InterpretationBlock title="Science rationale" hue="#A78BFA">
+            {a.scienceNote}
+          </InterpretationBlock>
+        )}
       </section>
+
+      {/* Calibration guide — equation + next-step task */}
+      {a.calibrationGuide && (
+        <section style={{ background: "#141E2A", border: "1px solid #2A3A4A", borderLeft: "3px solid #4A6FA8", borderRadius: 6, padding: "16px 22px", marginBottom: 22 }}>
+          <h3 style={{ fontFamily: "Georgia, serif", fontSize: "0.92rem", color: "#4A6FA8", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Calibration &amp; next steps
+          </h3>
+          <pre style={{ fontSize: 13, color: "#E8E8E8", lineHeight: 1.7, whiteSpace: "pre-wrap", fontFamily: "ui-monospace, Menlo, monospace", margin: 0 }}>
+            {a.calibrationGuide}
+          </pre>
+        </section>
+      )}
 
       {/* Minimum preconditions */}
       {a.minimumPreconditions && a.minimumPreconditions.length > 0 && (
