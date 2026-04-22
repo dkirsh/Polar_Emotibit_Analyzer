@@ -22,7 +22,7 @@ Built for cognitive-neuroscience-of-architecture research.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/YOUR_ORG/Polar_Emotibit_Analyzer.git
+git clone https://github.com/dkirsh/Polar_Emotibit_Analyzer.git
 cd Polar_Emotibit_Analyzer
 
 # 2. Run
