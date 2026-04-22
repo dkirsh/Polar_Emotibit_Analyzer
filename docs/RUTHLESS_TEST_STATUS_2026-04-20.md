@@ -3,7 +3,7 @@
 *Date*: 2026-04-20
 *Executor*: AG (Antigravity)
 *Target*: `/Users/davidusa/REPOS/Polar_Emotibit_Analyzer` at tip
-*Verdict*: **CLEANED (1 fix)**
+*Verdict*: **CLEANED (2 fix commits)**
 
 ---
 
@@ -31,7 +31,9 @@ All expected files present in all 6 directory groups. **PASS.**
 **PASS.** All 8 endpoints return 200 with correct response shape. Extended bundle contains all 6 data streams: `stress_decomposition` (4 components), `windowed`, `psd`, `rr_series_ms`, `cleaned_timeseries`, `inference`.
 
 ### Probe 4 — Frontend build + typecheck
-**BLOCKED.** npm is not installed on this machine. Cannot run `npm install && npm run build`. Not a code finding — environment limitation.
+**PASS.** `npm install && npm run build` green. `tsc --noEmit` produces zero TypeScript errors with strict mode. Vite build completes in 511ms producing `dist/` bundle (index.html + 240 kB JS + 5 kB CSS).
+
+> Node.js v25.2.1 / npm 11.6.2 via `/opt/homebrew/Cellar/node/25.2.1/bin`.
 
 ### Probe 5 — Real-data smoke test (Chung et al. 2026)
 **PASS.** Three participants from the Chung et al. OSF WYM3S `data_table.csv` tested. All within the ≤ 1 bpm MAE gate.
@@ -47,7 +49,16 @@ All expected files present in all 6 directory groups. **PASS.**
 > Note: Raw physiology.zip (988 MB) was not downloaded. Test used published summary IBI values from `data_table.csv` to generate reference-matched RR series. A full raw-data replication would require the physiology archive.
 
 ### Probe 6 — Three-group architecture rendering
-**BLOCKED.** npm not available; cannot start Vite dev server. Not a code finding.
+**PASS.** Full 15-step browser walk completed via Vite dev server.
+
+- **Steps 1-5**: StartPage renders with topbar, metadata fields (6), drop zones (3). Results cover page shows identity bar, three group cards (teal/amber/blue), quality flags.
+- **Steps 6-8**: Necessary Science group renders 5 cards with order numbers, chart-kind tags, titles, captions. Detail page shows breadcrumb, chart area, interpretation triplet (What/How/Arch), references, prev/next chain.
+- **Steps 9-10**: All 5 Necessary Science detail pages navigate via "next" without errors. Diagnostic group renders 5 cards.
+- **Step 11**: Question-Driven group renders two sections: Science questions (teal, 6 rows) and Diagnostics questions (amber, 4 rows).
+- **Step 12**: Science-question detail page carries uppercase research-question eyebrow above the title.
+- **Step 13**: No hardcoded numeric literals found — all statistics read from the API response.
+- **Step 14**: At 480px width, cards collapse to one column, no horizontal scroll, form elements remain usable.
+- **Step 15**: **Fixed.** Added "↓ Download analysis JSON" button on the cover page (commit `80c2370`).
 
 ### Probe 7 — Writer-voice text quality
 **PARTIAL PASS.** 15 catalog entries audited for word-count bounds and architectural-context content.
@@ -75,7 +86,32 @@ All expected files present in all 6 directory groups. **PASS.**
 **All 8 sub-probes: PASS.**
 
 ### Probe 9 — Cross-browser + accessibility
-**BLOCKED.** npm/Vite not available; cannot render the frontend for browser testing.
+**PASS.** WCAG AA contrast audit and ARIA landmark audit completed.
+
+**Contrast ratios** (all 10 key color pairs ≥ 4.5:1):
+
+| Element | FG | BG | Ratio |
+|---------|----|----|------:|
+| QC pill green | #1A7050 | #FFFFFF | 6.04 |
+| QC pill yellow | #8A6110 | #FFFFFF | 5.53 |
+| QC pill red | #B83A4A | #FFFFFF | 5.61 |
+| NA-cell text | #9A9A9A | #1E1E1E | 5.92 |
+| Link text | #00C896 | #121212 | 8.66 |
+| Body text | #E8E8E8 | #121212 | 15.29 |
+| Label text | #B8B8B8 | #121212 | 9.44 |
+| Caption text | #B8B8B8 | #1E1E1E | 8.40 |
+| Submit btn | #000000 | #00C896 | 9.70 |
+| Topbar text | #E6F5F0 | #1C3D3A | 10.51 |
+
+**ARIA landmarks added** (commit `80c2370`):
+- `<header role="banner">` on topbar with `<nav aria-label="Global navigation">`
+- `role="main"` + `aria-label` on all four page components
+- `role="button"` + `tabIndex={0}` + keyboard handler on dropzones
+- `role="status"` + `aria-live="polite"` on loading overlay
+- `aria-label` on group-card `<nav>`, provenance-flags `<section>`, breadcrumb `<nav>`, interpretation `<section>`, prev/next `<nav>`
+- `aria-hidden="true"` on decorative icons
+- `role="note"` on non-diagnostic notice
+- `role="list"` on quality-flags `<ul>`
 
 ### Probe 10 — Sibling-repo drift audit
 **PASS.** All 8 lifted modules byte-identical to sibling sources:
@@ -95,18 +131,18 @@ MATCH: app/core/config.py
 
 ## Fix commits
 
-| # | File | Description |
-|---|------|-------------|
-| 1 | `backend/app/services/ingestion/synthetic.py` | Fix `generate_synthetic_session(seconds < 120)` crash — length-relative motion-burst injection |
-| 2 | `backend/app/services/processing/drift.py` | Clarifying comment on ddof=0 in xcorr z-scoring (not a code change, documentation only) |
+| # | Commit | File(s) | Description |
+|---|--------|---------|-------------|
+| 1 | `c1738d0` | `backend/app/services/ingestion/synthetic.py` | Fix `generate_synthetic_session(seconds < 120)` crash — length-relative motion-burst injection |
+| 2 | `c1738d0` | `backend/app/services/processing/drift.py` | Clarifying comment on ddof=0 in xcorr z-scoring (documentation only) |
+| 3 | `80c2370` | `frontend/src/App.tsx`, `StartPage.tsx`, `ResultsCoverPage.tsx`, `AnalyticDetailPage.tsx` | ARIA landmarks, download-JSON button, keyboard-accessible dropzones |
 
 ---
 
 ## DK-decision items
 
-1. **Probe 4/6/9 blocked**: npm is not installed on this machine. Frontend build, rendering walk, and accessibility audit cannot execute without Node.js/npm.
-2. **Probe 7**: Six entries (mostly Diagnostic/Question-Diagnostics) lack explicit architectural-context language in `architecturalMeaning`. The Necessary Science entries are well-written. Decision: should the shorter Diagnostic entries be expanded?
-3. **Stress composite weights** (0.35/0.35/0.20/0.10) are arbitrary and unvalidated per `stress.py` docstring — this is a 90-day research task, not a test-probe fix.
+1. **Probe 7**: Six entries (mostly Diagnostic/Question-Diagnostics) lack explicit architectural-context language in `architecturalMeaning`. The Necessary Science entries are well-written. Decision: should the shorter Diagnostic entries be expanded?
+2. **Stress composite weights** (0.35/0.35/0.20/0.10) are arbitrary and unvalidated per `stress.py` docstring — this is a 90-day research task, not a test-probe fix.
 
 ## References
 
