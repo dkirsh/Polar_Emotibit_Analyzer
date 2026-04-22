@@ -117,8 +117,121 @@ Proposed fix (one-line): change `sync.py:64` to not add the derived `rr_ms` colu
 | F10 | P2 | P5.2 | Hex colour literals → CSS variables. |
 | F11 | P2 | P3.1 | Synthetic generator sampling rates don't match hardware (EDA 1 Hz vs 15 Hz real). Either document as "nominal rate" or upsample the generator. |
 
-## Next pass — real Polar H10 data
+---
 
-This audit used the synthetic generator. DK has asked for a pass with real Polar data from the Chung et al. (2026) OSF WYM3S deposit (or equivalent public Polar H10 CSV). That pass is queued as `docs/RUTHLESS_AUDIT_2026-04-21_CW_REAL_DATA.md`; running it is the immediate next step.
+## Real-data addendum — Welltory Polar H10 dataset
+
+After the synthetic-data pass, DK directed a second run against real
+Polar H10 RR-interval data. Source: [Welltory PPG dataset](https://github.com/Welltory/welltory-ppg-dataset),
+21 healthy volunteers recorded with a Polar H10 chest strap during
+68–112 second ambient-music sessions. CC0-1.0 licence. Accessed via
+GitHub's web viewer (direct raw-content hosts blocked in this session's
+egress proxy); RR values copied verbatim from `data/subject_01/RR.txt`
+and `data/subject_05/RR.txt` and written to the pipeline schema.
+
+Files (committed under `data/samples/welltory/`):
+
+| File | Beats | Duration | Mean RR | Ground-truth RMSSD | Ground-truth SDNN |
+|------|-------|----------|---------|---------------------|--------------------|
+| `welltory_s01_polar.csv` | 100 | 110.2 s | 1102 ms | 127.01 ms | 113.92 ms |
+| `welltory_s05_polar.csv` | 101 | 82.5 s | 817 ms | 35.28 ms | 55.24 ms |
+
+Ground-truth RMSSD, SDNN, and mean HR were computed directly from the
+RR arrays using textbook definitions. Pipeline outputs compared below.
+
+### R1 — Mean HR reproduction (PASS)
+
+| sample | GT mean_hr | pipeline mean_hr | error |
+|---|---|---|---|
+| s01 | 54.46 | 54.38 | 0.08 bpm |
+| s05 | 73.48 | 72.92 | 0.56 bpm |
+
+Both errors are within the Chung et al. (2026) MAE < 1 bpm bound.
+
+### R2 — RMSSD reproduction (**P0 FAIL on s05**)
+
+| sample | GT RMSSD | pipeline RMSSD | error |
+|---|---|---|---|
+| s01 | 127.01 ms | 125.38 ms | 1.63 ms (1.3%) |
+| s05 | 35.28 ms | 45.79 ms | **10.51 ms (29.8%)** |
+
+**P0 bug traced**, step-through on s05:
+
+| Step | n RR | RMSSD |
+|------|------|-------|
+| raw Welltory RR | 101 | 35.28 |
+| after `_filter_ectopic` | 101 | 35.28 |
+| after `synchronize_signals(emo, polar)` into 1 Hz grid | 83 | — |
+| after dedup of consecutive identical merged values | 80 | 43.64 |
+| after second ectopic filter | 80 | 43.64 |
+
+The `merge_asof` in `sync.py:17-40` uses `tolerance_ms=1000`. When
+Polar emits beat-level RR (as the real H10 does) and EmotiBit is at
+1 Hz (synthetic) or 15 Hz (real hardware with under-subsampling), 21%
+of beats are lost to the merge: 101 → 83 → 80. The decimated RR
+series produces a different diff distribution than the raw beat-to-beat
+series, inflating RMSSD by ~24%. RMSSD error scales with the ratio of
+Polar beat rate to the merge tolerance — slower heart rates (s01,
+54 bpm, RR > 1000 ms) are less affected because beats tend to fall in
+separate seconds; higher heart rates (s05, 74 bpm) pack more beats
+into each merge window.
+
+**Root cause**: HRV features must be computed from the raw Polar RR
+intervals, not from the sync-merged dataframe. The merge is correct
+for cross-sensor time alignment (HR and EDA on the same axis) but
+wrong as the input to HRV calculation.
+
+**Fix F12**: either (a) add a `raw_rr_ms` column to the synced
+dataframe preserving pre-merge values, then let `compute_hrv_features`
+read from it, or (b) split the pipeline so HRV features run on the
+raw Polar DataFrame before sync.
+
+### R3 — SDNN reproduction (PASS)
+
+| sample | GT SDNN | pipeline SDNN | error |
+|---|---|---|---|
+| s01 | 113.92 ms | 114.03 ms | 0.11 ms |
+| s05 | 55.24 ms | 54.93 ms | 0.31 ms |
+
+SDNN is global variance, not beat-to-beat difference, so it's much
+less sensitive to the decimation bug than RMSSD. Reproduction is
+effectively exact.
+
+### R4 — `rr_source` on real RR data (PASS)
+
+Both samples carry native `rr_ms`; pipeline correctly labels
+`rr_source: native_polar`. The synthetic-path mislabel (F1) remains
+P0 on any input lacking `rr_ms`.
+
+### R5 — Short-session LF/HF handling (PASS)
+
+Both sessions are 82–110 s, below the 5-min minimum for reliable
+frequency-domain HRV. Pipeline correctly returns `lf_ms2: None`,
+`hf_ms2: None`, `lf_hf_ratio: None` rather than inventing numbers.
+
+### R6 — Stress composite plausibility (PASS)
+
+| sample | stress | interpretation |
+|---|---|---|
+| s01 | 0.046 | very relaxed (HR 55, RMSSD 127) |
+| s05 | 0.196 | low/relaxed (HR 74, RMSSD 35) |
+
+Composite correctly orders the two: s01 < s05. Both at rest, both
+low-stress, consistent with the Welltory at-rest recording protocol.
+
+### Updated P0 list after real-data pass
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| F1 | P0 | `rr_source` mislabel on derived RR (synthetic-path) |
+| F2 | P0 | Empty-CSV returns 200 with stress_score 0.5 |
+| **F12** | **P0** | **HRV features computed from sync-decimated RR, losing 21% of beats → RMSSD biased by 29.8% on real data at normal HR** |
+
+F12 is the most consequential real-data finding because it affects
+every research use of the pipeline on real Polar data at normal adult
+heart rates. At the validation-grade claim "r > 0.99 vs Kubios
+reference" (Chung et al. 2026), an RMSSD error of 29.8% would be
+disqualifying — the current pipeline cannot substantiate that claim
+without fix F12.
 
 ---
