@@ -124,6 +124,25 @@ class FeatureSummary(BaseModel):
     hf_ms2: float | None = None
     lf_hf_ratio: float | None = None
 
+    # 2026-04-21 Kubios-parity extensions ----------------------------------
+    # Task Force (1996) time-domain additions
+    nn50: int | None = None
+    pnn50: float | None = None
+
+    # Brennan et al. (2001) Poincaré nonlinear descriptors
+    sd1_ms: float | None = None
+    sd2_ms: float | None = None
+    sd1_sd2_ratio: float | None = None
+    ellipse_area_ms2: float | None = None
+
+    # Task Force (1996) frequency-domain normalised units + percentages
+    total_power_ms2: float | None = None
+    lf_nu: float | None = None
+    hf_nu: float | None = None
+    vlf_pct: float | None = None
+    lf_pct: float | None = None
+    hf_pct: float | None = None
+
 
 class AnalysisResponse(BaseModel):
     """Top-level analysis response."""

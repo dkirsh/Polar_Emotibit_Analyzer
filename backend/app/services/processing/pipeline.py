@@ -52,6 +52,8 @@ from app.services.processing.features import (
     compute_eda_features,
     compute_hrv_features,
     compute_hrv_frequency_features,
+    compute_poincare_features,
+    compute_time_domain_features,
 )
 from app.services.processing.stress import (
     STRESS_SCORE_LABEL,
@@ -170,6 +172,9 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
     # movement epochs is a future enhancement. The current state is
     # a strict improvement over the decimation bug.
     rmssd_ms, sdnn_ms, mean_hr_bpm, rr_source = compute_hrv_features(corrected_polar)
+    # 2026-04-21 Kubios-parity: extended time-domain and Poincaré descriptors.
+    time_domain_ext = compute_time_domain_features(corrected_polar)
+    poincare = compute_poincare_features(corrected_polar)
     freq_features = compute_hrv_frequency_features(corrected_polar)
     eda_mean_us, eda_phasic_index = compute_eda_features(cleaned)
     stress_score = compute_stress_score(rmssd_ms, mean_hr_bpm, eda_mean_us, eda_phasic_index)
@@ -215,6 +220,19 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
         lf_ms2=freq_features.get("lf_ms2"),
         hf_ms2=freq_features.get("hf_ms2"),
         lf_hf_ratio=freq_features.get("lf_hf_ratio"),
+        # 2026-04-21 Kubios-parity fields
+        nn50=time_domain_ext.get("nn50"),
+        pnn50=time_domain_ext.get("pnn50"),
+        sd1_ms=poincare.get("sd1_ms"),
+        sd2_ms=poincare.get("sd2_ms"),
+        sd1_sd2_ratio=poincare.get("sd1_sd2_ratio"),
+        ellipse_area_ms2=poincare.get("ellipse_area_ms2"),
+        total_power_ms2=freq_features.get("total_power_ms2"),
+        lf_nu=freq_features.get("lf_nu"),
+        hf_nu=freq_features.get("hf_nu"),
+        vlf_pct=freq_features.get("vlf_pct"),
+        lf_pct=freq_features.get("lf_pct"),
+        hf_pct=freq_features.get("hf_pct"),
     )
     report_markdown = build_markdown_report(feature_summary, quality_flags)
 

@@ -108,7 +108,12 @@ def _filter_ectopic(rr: np.ndarray, threshold: float = 0.30) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def compute_hrv_features(df: pd.DataFrame) -> tuple[float, float, float, str]:
-    """Compute RMSSD, SDNN, mean HR. Returns (rmssd, sdnn, mean_hr, source)."""
+    """Compute RMSSD, SDNN, mean HR. Returns (rmssd, sdnn, mean_hr, source).
+
+    Kept as the legacy 4-tuple return for backwards compatibility. Callers
+    that want the full Task Force (1996) time-domain battery should call
+    `compute_time_domain_features` for NN50 and pNN50 as well.
+    """
     rr, source = _get_rr_intervals(df)
     mean_hr = float(df["hr_bpm"].mean()) if "hr_bpm" in df.columns else 0.0
     if len(rr) < 3:
@@ -117,6 +122,86 @@ def compute_hrv_features(df: pd.DataFrame) -> tuple[float, float, float, str]:
     rmssd = float(np.sqrt(np.mean(diff ** 2)))
     sdnn = float(np.std(rr, ddof=1))
     return rmssd, sdnn, mean_hr, source
+
+
+# ---------------------------------------------------------------------------
+# Extended HRV — Task Force (1996) + Brennan et al. (2001) Kubios-parity set
+# ---------------------------------------------------------------------------
+
+
+def compute_time_domain_features(df: pd.DataFrame) -> dict[str, float | int | None]:
+    """Full Task Force (1996) time-domain HRV panel.
+
+    Returns NN50, pNN50 in addition to the legacy RMSSD / SDNN / mean HR.
+
+    NN50  — count of successive RR differences > 50 ms (parasympathetic
+            proxy; widely cited in cog-neuro-of-architecture literature).
+    pNN50 — NN50 as a percentage of (N - 1) successive differences.
+
+    Reference:
+      Task Force of the European Society of Cardiology and the North
+      American Society of Pacing and Electrophysiology. (1996). Heart
+      rate variability. Circulation, 93(5), 1043-1065.
+      https://doi.org/10.1161/01.CIR.93.5.1043
+    """
+    rr, source = _get_rr_intervals(df)
+    mean_hr = float(df["hr_bpm"].mean()) if "hr_bpm" in df.columns else 0.0
+    out: dict[str, float | int | None] = {
+        "rmssd_ms": None, "sdnn_ms": None, "mean_hr_bpm": mean_hr,
+        "nn50": None, "pnn50": None, "rr_source": source,
+    }
+    if len(rr) < 3:
+        return out
+    diff = np.diff(rr)
+    abs_diff = np.abs(diff)
+    out["rmssd_ms"] = float(np.sqrt(np.mean(diff ** 2)))
+    out["sdnn_ms"] = float(np.std(rr, ddof=1))
+    nn50 = int(np.sum(abs_diff > 50.0))
+    out["nn50"] = nn50
+    out["pnn50"] = float(nn50 / len(diff) * 100.0)
+    return out
+
+
+def compute_poincare_features(df: pd.DataFrame) -> dict[str, float | None]:
+    """Poincaré-plot nonlinear HRV descriptors (Brennan et al., 2001).
+
+    SD1           — dispersion perpendicular to the line of identity;
+                    equals RMSSD / sqrt(2). Short-term HRV.
+    SD2           — dispersion along the line of identity. Long-term HRV.
+    SD1/SD2 ratio — balance of short- vs long-term variability.
+    ellipse_area  — π × SD1 × SD2, the classical Poincaré ellipse area.
+
+    Reference:
+      Brennan, M., Palaniswami, M., & Kamen, P. (2001). Do existing
+      measures of Poincaré plot geometry reflect nonlinear features of
+      heart rate variability? IEEE Transactions on Biomedical Engineering,
+      48(11), 1342-1347. https://doi.org/10.1109/10.959330
+    """
+    rr, _ = _get_rr_intervals(df)
+    empty: dict[str, float | None] = {
+        "sd1_ms": None, "sd2_ms": None,
+        "sd1_sd2_ratio": None, "ellipse_area_ms2": None,
+    }
+    if len(rr) < 4:
+        return empty
+    diff = np.diff(rr)
+    # Brennan et al. closed-form: SD1² = var(dRR) / 2, SD2² = 2*var(RR) - var(dRR)/2
+    var_rr = float(np.var(rr, ddof=1))
+    var_drr = float(np.var(diff, ddof=1))
+    sd1_sq = var_drr / 2.0
+    sd2_sq = 2.0 * var_rr - var_drr / 2.0
+    if sd1_sq < 0 or sd2_sq < 0:
+        return empty
+    sd1 = float(np.sqrt(sd1_sq))
+    sd2 = float(np.sqrt(sd2_sq))
+    ratio = sd1 / sd2 if sd2 > 0 else None
+    ellipse_area = float(np.pi * sd1 * sd2)
+    return {
+        "sd1_ms": sd1,
+        "sd2_ms": sd2,
+        "sd1_sd2_ratio": ratio,
+        "ellipse_area_ms2": ellipse_area,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -190,11 +275,44 @@ def compute_hrv_frequency_features(
         if lf is not None and hf is not None and hf > 0:
             ratio = lf / hf
 
+        # 2026-04-21 Kubios-parity additions:
+        # - total_power: sum of VLF + LF + HF (comparable to Kubios "Total power")
+        # - LF_nu, HF_nu: normalised units per Task Force (1996):
+        #     LF_nu = LF / (LF + HF) × 100
+        #     HF_nu = HF / (LF + HF) × 100
+        #   These normalise out heart-rate-dependent absolute power changes
+        #   and are the fields Task Force (1996) recommends for
+        #   between-subject comparison.
+        # - Percent-of-total fields (VLF%, LF%, HF%) for parity with Kubios.
+        total_power = None
+        lf_nu = None
+        hf_nu = None
+        vlf_pct = None
+        lf_pct = None
+        hf_pct = None
+        if lf is not None and hf is not None:
+            lf_plus_hf = lf + hf
+            if lf_plus_hf > 0:
+                lf_nu = float(lf / lf_plus_hf * 100.0)
+                hf_nu = float(hf / lf_plus_hf * 100.0)
+            if vlf is not None:
+                total_power = float((vlf or 0.0) + lf + hf)
+                if total_power > 0:
+                    vlf_pct = float((vlf or 0.0) / total_power * 100.0)
+                    lf_pct = float(lf / total_power * 100.0)
+                    hf_pct = float(hf / total_power * 100.0)
+
         return {
             "vlf_ms2": round(vlf, 2) if vlf is not None else None,
             "lf_ms2": round(lf, 2) if lf is not None else None,
             "hf_ms2": round(hf, 2) if hf is not None else None,
             "lf_hf_ratio": round(ratio, 4) if ratio is not None else None,
+            "total_power_ms2": round(total_power, 2) if total_power is not None else None,
+            "lf_nu": round(lf_nu, 2) if lf_nu is not None else None,
+            "hf_nu": round(hf_nu, 2) if hf_nu is not None else None,
+            "vlf_pct": round(vlf_pct, 2) if vlf_pct is not None else None,
+            "lf_pct": round(lf_pct, 2) if lf_pct is not None else None,
+            "hf_pct": round(hf_pct, 2) if hf_pct is not None else None,
             "rr_source": source,
         }
     except Exception:
