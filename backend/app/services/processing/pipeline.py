@@ -108,14 +108,31 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
     cleaned, movement_artifact_ratio = clean_signals(synced)
 
     # -- Step 5: Extract features ---------------------------------------------
-    rmssd_ms, sdnn_ms, mean_hr_bpm, rr_source = compute_hrv_features(cleaned)
+    #
+    # [F12 fix 2026-04-21]: HRV features read from the drift-corrected raw
+    # Polar DataFrame, NOT from the merged `cleaned` DataFrame. The
+    # merge_asof sync with 1000 ms tolerance silently decimates beat-level
+    # RR intervals (60–80 Hz native) to 1 Hz (EmotiBit-aligned), losing
+    # ~21 % of beats at 74 bpm and biasing RMSSD by ~30 %. Real-data proof
+    # on Welltory subject_05: pre-fix RMSSD 45.79 ms vs ground-truth
+    # 35.28 ms (29.8 % error). EDA features stay on the synced DataFrame
+    # because they need cross-sensor time alignment.
+    #
+    # Tradeoff: HRV now skips movement-artifact filtering (which is
+    # applied in clean_signals via EmotiBit accel). An artifact-aware
+    # HRV filter that drops RR beats falling inside accel-flagged
+    # movement epochs is a future enhancement. The current state is
+    # a strict improvement over the decimation bug.
+    rmssd_ms, sdnn_ms, mean_hr_bpm, rr_source = compute_hrv_features(corrected_polar)
+    freq_features = compute_hrv_frequency_features(corrected_polar)
     eda_mean_us, eda_phasic_index = compute_eda_features(cleaned)
     stress_score = compute_stress_score(rmssd_ms, mean_hr_bpm, eda_mean_us, eda_phasic_index)
-    freq_features = compute_hrv_frequency_features(cleaned)
 
     # -- Step 6: Quality flags ------------------------------------------------
     if len(cleaned) < 60:
-        quality_flags.append("Low sample count (< 60 synchronized samples)")
+        quality_flags.append("Low synchronized sample count (< 60 samples)")
+    if len(corrected_polar) < 50:
+        quality_flags.append("Low beat count for HRV (< 50 beats; RMSSD stability uncertain)")
     if rmssd_ms <= 1.0:
         quality_flags.append("RMSSD unusually low")
     if movement_artifact_ratio > 0.2:
