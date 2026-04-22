@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Form, HTTPException, Response, UploadFile, status
 
 from app.schemas.analysis import (
     AnalysisResponse,
@@ -304,6 +304,43 @@ def get_session(session_id: str) -> SessionDetail:
         )
     record = _SESSION_STORE[session_id]
     return SessionDetail(**record)
+
+
+@router.get("/sessions/{session_id}/export")
+def export_session(session_id: str, format: str = "csv") -> Response:
+    """Export a stored session in one of four Kubios-parity formats.
+
+    Supported formats: csv, xlsx (Excel), mat (MATLAB), pdf.
+    """
+    from app.services.reporting.exporters import EXPORTERS, MIME_TYPES
+
+    if session_id not in _SESSION_STORE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No session found for session_id={session_id!r}",
+        )
+    fmt = format.lower()
+    if fmt not in EXPORTERS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unsupported format {format!r}; use one of {sorted(EXPORTERS)}",
+        )
+
+    record = _SESSION_STORE[session_id]
+    # The stored result is already AnalysisResponse-shaped; rehydrate.
+    analysis = AnalysisResponse(**record["result"])
+    exporter = EXPORTERS[fmt]
+    payload = (
+        exporter(analysis, session_id=session_id)
+        if fmt == "pdf"
+        else exporter(analysis)
+    )
+    filename = f"{session_id}.{fmt}"
+    return Response(
+        content=payload,
+        media_type=MIME_TYPES[fmt],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/benchmark/kubios", response_model=list[BlandAltmanMetric])

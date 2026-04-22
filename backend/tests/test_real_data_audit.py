@@ -201,3 +201,90 @@ def test_below_minimum_emotibit_samples_returns_422(client, meta):
     assert r.status_code == 422
     assert r.json()["detail"]["reason"] == "insufficient_data"
     assert r.json()["detail"]["n_emotibit"] == 10
+
+
+# -- Kubios-parity: four export formats on real Welltory data ---------------
+
+
+def _welltory_analysis(name: str = "s05"):
+    """Run the pipeline on a Welltory sample and return the AnalysisResponse."""
+    polar = _load_welltory(name)
+    duration_s = int(polar["timestamp_ms"].iloc[-1] / 1000) + 1
+    emo, _ = generate_synthetic_session(seconds=duration_s)
+    return run_analysis(emo, polar)
+
+
+def test_export_csv_is_parseable():
+    from app.services.reporting.exporters import export_to_csv
+    analysis = _welltory_analysis()
+    out = export_to_csv(analysis)
+    text = out.decode("utf-8")
+    header = text.splitlines()[0]
+    assert header == "group,metric,value,unit"
+    # Quality flags section must be present
+    assert "# Quality flags" in text
+
+
+def test_export_xlsx_has_expected_sheets():
+    import io as _io
+    from openpyxl import load_workbook
+    from app.services.reporting.exporters import export_to_xlsx
+    analysis = _welltory_analysis()
+    out = export_to_xlsx(analysis)
+    wb = load_workbook(_io.BytesIO(out))
+    assert "Summary" in wb.sheetnames
+    assert "Quality flags" in wb.sheetnames
+    assert "Non-diagnostic notice" in wb.sheetnames
+    # At least one group sheet
+    group_sheets = [s for s in wb.sheetnames if s in {
+        "Time-Domain HRV", "Poincare", "Frequency-Domain HRV", "EDA",
+    }]
+    assert len(group_sheets) >= 3
+
+
+def test_export_mat_has_analysis_struct():
+    import io as _io
+    from scipy.io import loadmat
+    from app.services.reporting.exporters import export_to_mat
+    analysis = _welltory_analysis()
+    out = export_to_mat(analysis)
+    mat = loadmat(_io.BytesIO(out), squeeze_me=True, struct_as_record=False)
+    assert "analysis" in mat
+    ana = mat["analysis"]
+    # The time_domain sub-struct must carry the core time-domain metrics
+    td = ana.time_domain
+    assert hasattr(td, "rmssd_ms")
+    assert hasattr(td, "sdnn_ms")
+    assert hasattr(td, "mean_hr_bpm")
+
+
+def test_export_pdf_has_pdf_header():
+    from app.services.reporting.exporters import export_to_pdf
+    analysis = _welltory_analysis()
+    out = export_to_pdf(analysis, session_id="welltory-s05")
+    # PDF files begin with %PDF-1.x
+    assert out.startswith(b"%PDF-"), f"not a PDF; first 8 bytes = {out[:8]!r}"
+    assert len(out) > 1000  # non-trivial content
+
+
+def test_export_endpoint_roundtrip_404_on_missing():
+    """GET /api/v1/sessions/unknown/export?format=csv -> 404."""
+    c = TestClient(app)
+    r = c.get("/api/v1/sessions/does-not-exist/export", params={"format": "csv"})
+    assert r.status_code == 404
+
+
+def test_export_endpoint_rejects_unknown_format():
+    """Unknown format returns 422."""
+    # Need a stored session; import from the route module
+    from app.api.v1.routes.analysis import _SESSION_STORE
+    _SESSION_STORE["fmt-test"] = {
+        "session_id": "fmt-test",
+        "subject_id": "x", "study_id": "y", "session_date": "2026-04-21",
+        "analyzed_at": "2026-04-21T00:00:00",
+        "result": _welltory_analysis().model_dump(),
+    }
+    c = TestClient(app)
+    r = c.get("/api/v1/sessions/fmt-test/export", params={"format": "exe"})
+    assert r.status_code == 422
+    _SESSION_STORE.pop("fmt-test", None)
