@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getSession, StoredSession } from "../api";
+import { getSession, sessionExportUrl, StoredSession } from "../api";
 import { GROUP_META, analyticsByGroup } from "../analytics/catalog";
 
 /**
@@ -89,8 +89,10 @@ export const ResultsCoverPage: React.FC = () => {
         <b>Non-diagnostic notice.</b> {r.non_diagnostic_notice}
       </div>
 
-      {/* Download extended analytics JSON — Probe 6 Step 15 fix */}
-      <div className="download-row" style={{ marginTop: 18 }}>
+      {/* Download row — JSON + four Kubios-parity report formats.
+          The four format buttons link to the server-side export endpoint
+          which runs through app/services/reporting/exporters.py. */}
+      <div className="download-row" style={{ marginTop: 18, display: "flex", flexWrap: "wrap", gap: 8 }}>
         <button
           className="download-btn"
           aria-label="Download full analysis JSON"
@@ -104,8 +106,40 @@ export const ResultsCoverPage: React.FC = () => {
             URL.revokeObjectURL(url);
           }}
         >
-          ↓ Download analysis JSON
+          ↓ JSON
         </button>
+        <a
+          className="download-btn"
+          href={sessionExportUrl(session.session_id, "csv")}
+          download={`${session.session_id}.csv`}
+          aria-label="Download analysis as CSV"
+        >
+          ↓ CSV
+        </a>
+        <a
+          className="download-btn"
+          href={sessionExportUrl(session.session_id, "xlsx")}
+          download={`${session.session_id}.xlsx`}
+          aria-label="Download analysis as Excel workbook"
+        >
+          ↓ XLSX
+        </a>
+        <a
+          className="download-btn"
+          href={sessionExportUrl(session.session_id, "mat")}
+          download={`${session.session_id}.mat`}
+          aria-label="Download analysis as MATLAB .mat file"
+        >
+          ↓ MAT
+        </a>
+        <a
+          className="download-btn"
+          href={sessionExportUrl(session.session_id, "pdf")}
+          download={`${session.session_id}.pdf`}
+          aria-label="Download analysis as PDF report"
+        >
+          ↓ PDF
+        </a>
       </div>
 
       <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>

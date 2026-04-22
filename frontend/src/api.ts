@@ -13,7 +13,32 @@ export type FeatureSummary = {
   lf_ms2: number | null;
   hf_ms2: number | null;
   lf_hf_ratio: number | null;
+
+  // 2026-04-21 Kubios-parity additions. All optional so legacy
+  // AnalysisResponse payloads continue to roundtrip cleanly.
+  nn50?: number | null;
+  pnn50?: number | null;
+  sd1_ms?: number | null;
+  sd2_ms?: number | null;
+  sd1_sd2_ratio?: number | null;
+  ellipse_area_ms2?: number | null;
+  total_power_ms2?: number | null;
+  lf_nu?: number | null;
+  hf_nu?: number | null;
+  vlf_pct?: number | null;
+  lf_pct?: number | null;
+  hf_pct?: number | null;
+  stress_score_v2?: number | null;
+  stress_v2_contributions?: Record<string, number | null> | null;
 };
+
+// Report-export formats (GET /api/v1/sessions/{id}/export?format=...)
+export type ExportFormat = "csv" | "xlsx" | "mat" | "pdf";
+
+/** URL for downloading a stored session in one of the four formats. */
+export function sessionExportUrl(sessionId: string, format: ExportFormat): string {
+  return `/api/v1/sessions/${encodeURIComponent(sessionId)}/export?format=${format}`;
+}
 
 export type AnalysisResponse = {
   synchronized_samples: number;

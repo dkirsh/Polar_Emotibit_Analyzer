@@ -1,8 +1,10 @@
 # Polar-EmotiBit Analyzer
 
-A research-grade physiological data analysis tool for synchronizing Polar H10 heart-rate data with EmotiBit electrodermal/motion data, computing HRV, EDA, and stress features, and presenting results through an interactive browser-based dashboard with 21 science-writer-voice analytics.
+A research-grade physiological data analysis tool for synchronizing Polar H10 heart-rate data with EmotiBit electrodermal/motion data, computing HRV, EDA, and stress features, and presenting results through an interactive browser-based dashboard with 24 science-writer-voice analytics.
 
-Built for cognitive-neuroscience-of-architecture research. Validated against Kubios HRV Premium (Chung et al., 2026: r > 0.99, MAE < 1 bpm).
+Built for cognitive-neuroscience-of-architecture research.
+
+**Validation status.** HR reproduction is validated within 1 bpm against Chung et al. (2026), who compared the Polar H10 against a gold-standard Lead II ECG system. Time-domain and Poincaré HRV features (RMSSD, SDNN, NN50, pNN50, SD1, SD2, SD1/SD2 ratio, ellipse area) reproduce textbook-formula references within 1 % on real Polar H10 data from the Welltory PPG dataset (committed under `data/samples/welltory/`). Normalised-unit frequency-domain features (LF_nu, HF_nu, total power, VLF/LF/HF %) follow the Task Force (1996) definitions; ectopic correction uses the Lipponen-Tarvainen (2019) adaptive-threshold algorithm with cubic-spline interpolation (the Kubios default). A paired Bland-Altman comparison against Kubios HRV Premium's own output on identical sessions is still pending. See `docs/RUTHLESS_AUDIT_2026-04-21_CW.md` for the full feature-by-feature parity comparison and `docs/FIX_PLAN_2026-04-21.md` for remaining work.
 
 ---
 
