@@ -31,7 +31,7 @@ from app.services.processing.extended_analytics import (
 )
 from app.services.processing.features import _get_rr_intervals, compute_edr
 from app.services.processing.kubios_benchmark import compare_with_kubios
-from app.services.processing.pipeline import run_analysis
+from app.services.processing.pipeline import InsufficientDataError, run_analysis
 from app.services.processing.statistics import compute_inference_summary, compute_summary_stats
 from app.services.processing.sync import synchronize_signals
 
@@ -119,6 +119,19 @@ async def analyze(
 
     try:
         result = run_analysis(em_df, pol_df)
+    except InsufficientDataError as exc:
+        # F2 + F6 fix 2026-04-21: insufficient input is a client-data
+        # problem, not a pipeline failure. Return 422 with a structured
+        # detail so the frontend can distinguish from a true 500.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "reason": "insufficient_data",
+                "message": exc.detail,
+                "n_polar": exc.n_polar,
+                "n_emotibit": exc.n_emotibit,
+            },
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

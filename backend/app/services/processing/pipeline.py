@@ -20,6 +20,30 @@ import pandas as pd
 from app.schemas.analysis import AnalysisResponse, FeatureSummary
 from app.services.ai.adapters import NON_DIAGNOSTIC_NOTICE
 from app.services.processing.clean import clean_signals
+
+
+# Minimum-sample thresholds (F2 + F6 fix 2026-04-21).
+# MIN_BEATS_FOR_HRV: Kubios user-guide recommendation for RMSSD stability;
+#   Task Force 1996 guideline for short-term HRV time-domain analysis.
+# MIN_SAMPLES_FOR_SYNC: 30 s at 1 Hz is the practical floor for any
+#   cross-sensor synchronization claim.
+MIN_BEATS_FOR_HRV = 50
+MIN_SAMPLES_FOR_SYNC = 30
+
+
+class InsufficientDataError(ValueError):
+    """Raised when the input DataFrames are too small for meaningful analysis.
+
+    The route handler translates this into an HTTP 422 with a structured
+    detail body so clients can distinguish "endpoint failed" (500) from
+    "input insufficient" (422).
+    """
+
+    def __init__(self, detail: str, *, n_polar: int, n_emotibit: int) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.n_polar = n_polar
+        self.n_emotibit = n_emotibit
 from app.services.processing.drift import (
     apply_piecewise_drift,
     estimate_piecewise_drift,
@@ -40,6 +64,28 @@ from app.services.reporting.report_builder import build_markdown_report
 
 def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisResponse:
     """Run full processing pipeline from raw dataframes to API response."""
+
+    # -- Step 0: Minimum-sample guard (F2 + F6 fix 2026-04-21) ---------------
+    # Reject inputs too small for meaningful analysis. Empty or tiny inputs
+    # previously produced HTTP 200 with default feature values including
+    # stress_score 0.5 — an affirmative wrong answer. Now they produce 422
+    # with a structured reason.
+    n_polar = int(len(polar_df))
+    n_emotibit = int(len(emotibit_df))
+    if n_polar < MIN_BEATS_FOR_HRV:
+        raise InsufficientDataError(
+            f"Polar file has {n_polar} beats; HRV analysis requires "
+            f"at least {MIN_BEATS_FOR_HRV} beats for RMSSD stability "
+            f"(Kubios user-guide convention; Task Force 1996 guideline).",
+            n_polar=n_polar, n_emotibit=n_emotibit,
+        )
+    if n_emotibit < MIN_SAMPLES_FOR_SYNC:
+        raise InsufficientDataError(
+            f"EmotiBit file has {n_emotibit} samples; cross-sensor "
+            f"synchronization requires at least {MIN_SAMPLES_FOR_SYNC} "
+            f"samples (~30 s at 1 Hz).",
+            n_polar=n_polar, n_emotibit=n_emotibit,
+        )
 
     # -- Step 1: Piecewise drift correction -----------------------------------
     drift_model = estimate_piecewise_drift(
