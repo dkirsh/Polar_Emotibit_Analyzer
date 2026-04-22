@@ -93,7 +93,7 @@ async def analyze(
         pol_df = parse_polar_csv(pol_text)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"CSV schema validation failed: {exc}",
         )
     except Exception as exc:  # noqa: BLE001
@@ -310,7 +310,7 @@ async def benchmark_against_kubios(
         comparisons = compare_with_kubios(sys_df, kub_df, join_col=join_col)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         )
 

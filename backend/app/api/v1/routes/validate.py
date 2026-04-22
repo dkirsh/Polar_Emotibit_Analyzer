@@ -36,7 +36,7 @@ async def validate_emotibit_csv(file: UploadFile) -> dict[str, Any]:
         df = parse_emotibit_csv(csv_text)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"valid": False, "reason": str(exc)},
         )
     except Exception as exc:  # noqa: BLE001
@@ -75,7 +75,7 @@ async def validate_polar_csv(file: UploadFile) -> dict[str, Any]:
         df = parse_polar_csv(csv_text)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"valid": False, "reason": str(exc)},
         )
     except Exception as exc:  # noqa: BLE001
@@ -142,7 +142,7 @@ async def validate_markers_csv(file: UploadFile) -> dict[str, Any]:
     missing = sorted(required.difference(df.columns))
     if missing:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"valid": False, "reason": f"Missing required columns: {missing}"},
         )
 
