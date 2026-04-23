@@ -17,6 +17,28 @@ from app.services.ingestion.synthetic import generate_synthetic_session
 client = TestClient(app)
 
 
+def _raw_ecg_csv(seconds: int = 120, sample_hz: int = 130) -> bytes:
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(7)
+    rr_ms = np.full(max(55, int(seconds / 0.8)), 800.0)
+    total_ms = int((len(rr_ms) + 2) * 800)
+    dt_ns = int(round(1_000_000_000 / sample_hz))
+    ts_ns = np.arange(0, int(total_ms * 1_000_000), dt_ns, dtype=np.int64)
+    ecg_uv = rng.normal(0.0, 18.0, len(ts_ns))
+    sample_ms = ts_ns / 1_000_000.0
+    kernel = [80.0, 240.0, 900.0, 240.0, 80.0]
+    beat_times_ms = np.cumsum(rr_ms)
+    for beat_ms in beat_times_ms:
+        idx = int(np.argmin(np.abs(sample_ms - beat_ms)))
+        for offset, amp in enumerate(kernel, start=-2):
+            j = idx + offset
+            if 0 <= j < len(ecg_uv):
+                ecg_uv[j] += amp
+    return pd.DataFrame({"timestamp_ns": ts_ns, "ecg_uv": ecg_uv}).to_csv(index=False).encode()
+
+
 def _synthetic_csvs(seconds: int = 180) -> tuple[bytes, bytes]:
     # Note: generate_synthetic_session injects motion bursts at fixed
     # positions (frame 40 and 110) in its bundled implementation, so
@@ -67,6 +89,19 @@ def test_validate_polar_csv_reports_rr_source():
     assert body["rr_source"] == "derived_from_bpm"
 
 
+def test_validate_polar_csv_accepts_raw_ecg():
+    r = client.post(
+        "/api/v1/validate/csv/polar",
+        files={"file": ("polar_raw_ecg.csv", _raw_ecg_csv(), "text/csv")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["valid"] is True
+    assert body["has_raw_ecg"] is True
+    assert body["rr_source"] == "derived_from_ecg"
+    assert "computed in-app" in body["rr_source_note"]
+
+
 def test_validate_emotibit_csv_rejects_missing_columns():
     bad = b"timestamp_ms,not_eda\n0,1.0\n1000,1.1\n"
     r = client.post(
@@ -104,6 +139,27 @@ def test_analyze_on_synthetic_pair_returns_feature_summary():
     assert body["synchronized_samples"] > 0
     assert isinstance(body["quality_flags"], list)
     assert body["non_diagnostic_notice"]  # required per AI safety notice
+
+
+def test_analyze_accepts_raw_ecg_polar_csv():
+    em_bytes, _ = _synthetic_csvs(180)
+    r = client.post(
+        "/api/v1/analyze",
+        files={
+            "emotibit_file": ("em.csv", em_bytes, "text/csv"),
+            "polar_file": ("polar_raw_ecg.csv", _raw_ecg_csv(180), "text/csv"),
+        },
+        data={
+            "session_id": "TEST_ANALYZE_RAW_ECG",
+            "subject_id": "P01",
+            "study_id": "STUDY01",
+            "session_date": "2026-04-20",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["feature_summary"]["rr_source"] == "derived_from_ecg"
+    assert body["feature_summary"]["rmssd_ms"] >= 0
 
 
 def test_analyze_missing_metadata_returns_422():

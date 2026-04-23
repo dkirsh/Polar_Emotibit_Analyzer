@@ -40,6 +40,8 @@ def synchronize_signals(
     pol_cols = ["timestamp_ms", "hr_bpm"]
     if "rr_ms" in polar.columns:
         pol_cols.append("rr_ms")
+    if "rr_source" in polar.columns:
+        pol_cols.append("rr_source")
     pol = polar[pol_cols].copy()
     pol["timestamp_ms"] = pol["timestamp_ms"].astype(int)
     pol = pol.rename(columns={"timestamp_ms": "polar_timestamp_ms"}).sort_values("polar_timestamp_ms")
@@ -57,11 +59,17 @@ def synchronize_signals(
     if "rr_ms" in merged.columns:
         rr_numeric = pd.to_numeric(merged["rr_ms"], errors="coerce")
         derived_rr = 60000.0 / pd.to_numeric(merged["hr_bpm"], errors="coerce")
-        merged["rr_source"] = np.where(rr_numeric.notna(), "native_polar", "derived_from_bpm")
+        if "rr_source" in merged.columns:
+            fallback = pd.Series(
+                np.where(rr_numeric.notna(), "native_polar", "derived_from_bpm"),
+                index=merged.index,
+            )
+            merged["rr_source"] = merged["rr_source"].fillna(fallback)
+        else:
+            merged["rr_source"] = np.where(rr_numeric.notna(), "native_polar", "derived_from_bpm")
         merged["rr_ms"] = rr_numeric.fillna(derived_rr)
     else:
         merged["rr_source"] = "derived_from_bpm"
         merged["rr_ms"] = 60000.0 / pd.to_numeric(merged["hr_bpm"], errors="coerce")
 
     return merged.reset_index(drop=True)
-

@@ -66,10 +66,10 @@ async def validate_emotibit_csv(file: UploadFile) -> CsvValidationResponse:
 async def validate_polar_csv(file: UploadFile) -> CsvValidationResponse:
     """Validate a Polar H10 CSV without running the pipeline.
 
-    Reports whether native rr_ms is present (research-grade HRV) vs only
-    hr_bpm (BPM-derived RR, reduced accuracy). The distinction matters
-    for downstream HRV interpretability and is flagged here so the
-    analyst can decide before committing to an analysis.
+    Reports whether the file contains raw ECG (preferred), native RR
+    intervals, or only beat-level BPM. The distinction matters for
+    downstream HRV interpretability and is flagged here so the analyst
+    can decide before committing to an analysis.
     """
     try:
         csv_text = (await file.read()).decode("utf-8", errors="replace")
@@ -85,20 +85,19 @@ async def validate_polar_csv(file: UploadFile) -> CsvValidationResponse:
             detail={"valid": False, "reason": f"Parse error: {exc.__class__.__name__}: {exc}"},
         )
 
-    present = set(df.columns)
-    has_rr = "rr_ms" in present
+    present = set(df.attrs.get("input_columns_present", list(df.columns)))
+    has_rr = bool(df.attrs.get("has_native_rr"))
+    has_raw_ecg = bool(df.attrs.get("has_raw_ecg"))
+    rr_source = str(df.attrs.get("rr_source", "derived_from_bpm"))
     return CsvValidationResponse(
         valid=True,
         filename=file.filename,
-        n_rows=int(len(df)),
+        n_rows=int(df.attrs.get("input_n_rows", len(df))),
         columns_present=sorted(present),
         has_native_rr=has_rr,
-        rr_source="native_polar" if has_rr else "derived_from_bpm",
-        rr_source_note=(
-            "Native Polar RR intervals present — research-grade HRV."
-            if has_rr
-            else "Only hr_bpm present — HRV will be derived from BPM (reduced accuracy)."
-        ),
+        has_raw_ecg=has_raw_ecg,
+        rr_source=rr_source,
+        rr_source_note=str(df.attrs.get("rr_source_note", "")),
         timestamp_range_ms=CsvTimestampRange(
             min=int(df["timestamp_ms"].min()),
             max=int(df["timestamp_ms"].max()),

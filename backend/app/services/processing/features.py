@@ -61,6 +61,16 @@ def _get_rr_intervals(df: pd.DataFrame) -> tuple[np.ndarray, str]:
     This preserves the actual beat-to-beat intervals while discarding
     merge-induced replication.
     """
+    source_hint = None
+    if "rr_source" in df.columns:
+        source_values = (
+            pd.Series(df["rr_source"])
+            .dropna()
+            .astype(str)
+        )
+        if len(source_values) > 0:
+            source_hint = source_values.iloc[0]
+
     if "rr_ms" in df.columns:
         rr_raw = pd.to_numeric(df["rr_ms"], errors="coerce").dropna()
         if len(rr_raw) >= 3:
@@ -81,7 +91,7 @@ def _get_rr_intervals(df: pd.DataFrame) -> tuple[np.ndarray, str]:
             else:
                 rr = _filter_ectopic(rr)  # fall back for short sessions
             if len(rr) >= 3:
-                return rr, "native_polar"
+                return rr, source_hint or "native_polar"
     return _rr_from_hr(df["hr_bpm"]), "derived_from_bpm"
 
 

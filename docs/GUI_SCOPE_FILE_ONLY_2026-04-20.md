@@ -30,7 +30,7 @@ The page captures session identity *and* the two (optionally three) files in a s
 **Upload panel** (block on the right):
 
 - **EmotiBit CSV** — drag-drop zone + click-to-browse fallback. Required. On drop, client-side POSTs the file to `/api/v1/validate/csv/emotibit` for schema check; renders the validator's response inline (pass → green check with row count and column list; fail → red with the specific missing-column message). No multi-file selection.
-- **Polar H10 CSV** — same pattern, separately. Required. Posted to `/api/v1/validate/csv/polar`. The schema validator enforces `timestamp_ms` and `hr_bpm`; `rr_ms` is optional but its presence is reported (because native RR gives research-grade HRV where BPM-derived RR does not, per `backend/app/services/processing/features.py`).
+- **Polar H10 CSV** — same pattern, separately. Required. Posted to `/api/v1/validate/csv/polar`. Preferred input is a raw ECG export (`timestamp_ms` or `timestamp_ns` plus `ecg_uv`/`ecg_mv`/`ecg`), because the app can derive HR and RR itself from the raw trace. Legacy beat-level exports are still accepted: `timestamp_ms` + `hr_bpm`, with `rr_ms` optional. The validator reports whether the file is raw ECG, native RR, or BPM-only, because that distinction matters for HRV interpretability.
 - **Event markers CSV** — optional drag-drop. Holds phase timings (`recording_start`, `stress_task_start`, `stress_task_end`, `recovery_start`, `recording_end`) in the format `docs/REAL_DATA_SYNC_COLLECTION_REPORT_2026-03-01.md` of the sibling repo specifies. Absent → analysis runs across the full temporal overlap only; present → the results page computes features window-by-window per declared phase. Schema validation via `/api/v1/validate/csv/markers` (a new endpoint; schema: `session_id`, `event_code`, `utc_ms`, `note_optional`).
 
 **Phase-timing fallback** (shown only when no markers CSV was uploaded):
@@ -47,7 +47,7 @@ A table of the last 10 sessions this browser has run (`session_id`, `subject_id`
 
 The scaffold is already there — it just needs to read from the API response rather than from JSX literals.
 
-**Header strip** — replaces the "Setup New Project / Go to Dashboard" route toggle with a **session-identity bar**: `Session {session_id} · Subject {subject_id} · {date} · {operator}`, followed by a secondary line `Analyzed at {timestamp} · {rr_source: native_polar | derived_from_bpm}`. This is where "which analysis am I looking at" is answered; a dashboard that has no identity bar is trivially confusing on a second session.
+**Header strip** — replaces the "Setup New Project / Go to Dashboard" route toggle with a **session-identity bar**: `Session {session_id} · Subject {subject_id} · {date} · {operator}`, followed by a secondary line `Analyzed at {timestamp} · {rr_source: native_polar | derived_from_ecg | derived_from_bpm}`. This is where "which analysis am I looking at" is answered; a dashboard that has no identity bar is trivially confusing on a second session.
 
 **Sync-QC panel** — the existing "Drift Corrected ✓ / Overlap Confirmed ✓ / Confidence: Green" markup stays, but **each check reads from the response**. The pill colour comes from `sync_qc_band` (`green|yellow|red`). The numeric score comes from `sync_qc_score` (0–100). Below the pill, render `sync_qc_failure_reasons` as a list if any — the point of the sync-QC gate (per the sibling's `sync_qc.py`) is that the user is supposed to see *why* a session is yellow or red, not just that it is.
 

@@ -166,12 +166,18 @@ export const StartPage: React.FC = () => {
               `${info.n_rows} rows, ${info.timestamp_range_ms.span_s}s · ${info.has_accelerometer ? "accelerometer present" : "no accelerometer"}${info.has_respiration ? " · resp_bpm present" : ""}`}
           />
           <DropSlot
-            label="Polar H10 CSV (HR / RR)"
+            label="Polar H10 CSV (raw ECG preferred)"
             required
             state={polar}
             onFile={(f) => onDropFile("pol", f)}
             describeInfo={(info) =>
-              `${info.n_rows} rows, ${info.timestamp_range_ms.span_s}s · ${info.rr_source === "native_polar" ? "native RR (research-grade)" : "hr_bpm only (BPM-derived RR, reduced accuracy)"}`}
+              `${info.n_rows} rows, ${info.timestamp_range_ms.span_s}s · ${
+                info.rr_source === "derived_from_ecg"
+                  ? "raw ECG present (HR/RR computed in app)"
+                  : info.rr_source === "native_polar"
+                    ? "native RR present (research-grade)"
+                    : "hr_bpm only (BPM-derived RR, reduced accuracy)"
+              }`}
           />
           <DropSlot
             label="Event markers CSV (optional)"

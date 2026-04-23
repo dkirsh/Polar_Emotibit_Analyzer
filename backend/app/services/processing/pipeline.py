@@ -213,6 +213,11 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
             "HRV computed from BPM-derived RR intervals (reduced accuracy). "
             "Provide native Polar RR intervals (rr_ms column) for research-grade HRV."
         )
+    elif rr_source == "derived_from_ecg":
+        quality_flags.append(
+            "HRV computed from raw Polar H10 ECG with in-app R-peak detection. "
+            "This is the preferred file path when the ECG trace is clean."
+        )
     else:
         quality_flags.append("HRV computed from native Polar H10 RR intervals (research-grade)")
 

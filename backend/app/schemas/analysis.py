@@ -80,7 +80,8 @@ class CsvValidationResponse(BaseModel):
 
     # Polar-specific
     has_native_rr: bool | None = None
-    rr_source: str | None = None         # "native_polar" | "derived_from_bpm"
+    has_raw_ecg: bool | None = None
+    rr_source: str | None = None         # "native_polar" | "derived_from_ecg" | "derived_from_bpm"
     rr_source_note: str | None = None    # human-readable summary of the choice
 
     # Markers-specific

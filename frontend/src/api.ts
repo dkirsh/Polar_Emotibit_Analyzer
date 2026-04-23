@@ -8,7 +8,7 @@ export type FeatureSummary = {
   eda_mean_us: number;
   eda_phasic_index: number;
   stress_score: number;
-  rr_source: "native_polar" | "derived_from_bpm";
+  rr_source: "native_polar" | "derived_from_ecg" | "derived_from_bpm";
   vlf_ms2: number | null;
   lf_ms2: number | null;
   hf_ms2: number | null;
@@ -73,7 +73,8 @@ export type ValidatePolarResponse = {
   n_rows: number;
   columns_present: string[];
   has_native_rr: boolean;
-  rr_source: "native_polar" | "derived_from_bpm";
+  has_raw_ecg?: boolean;
+  rr_source: "native_polar" | "derived_from_ecg" | "derived_from_bpm";
   rr_source_note: string;
   timestamp_range_ms: { min: number; max: number; span_s: number };
 };

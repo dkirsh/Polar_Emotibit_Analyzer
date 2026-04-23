@@ -41,15 +41,17 @@ cd data/samples
 # The dataset is structured one-folder-per-participant; pick a single
 # representative participant (e.g. P01) for the first smoke test.
 
-# Column rename: the Chung et al. format carries (timestamp_ns, ecg_uv) for
-# raw ECG at 133 Hz.  Our pipeline expects (timestamp_ms, hr_bpm, rr_ms).
-# The IBI file already carries RR intervals; convert timestamps ns -> ms,
-# derive hr_bpm = 60000/rr_ms per beat, emit as polar_sample_01.csv.
+# The Chung et al. format carries (timestamp_ns, ecg_uv) for raw ECG at 133 Hz.
+# The current pipeline now accepts that raw ECG directly. If one prefers a
+# beat-level compatibility file, the older conversion script still works.
 
 python3 scripts/chung2026_to_polar_schema.py \
     --participant-dir data/samples/P01 \
     --out data/samples/polar_sample_01.csv
 
+# Or skip the conversion and post the raw ECG CSV directly through
+# /api/v1/analyze.
+#
 # Run the pipeline (POST the CSV through the /api/v1/analyze endpoint)
 # and compare the computed HR series against the gold-standard ECG-derived
 # HR from the same participant.  Expected: Pearson r > 0.99 per the
