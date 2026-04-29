@@ -34,12 +34,11 @@ class SessionDetail(BaseModel):
     """Full session record stored in the in-memory session store.
 
     The `result` field carries the full AnalysisResponse-shaped dict
-    that the analyze endpoint emitted; kept as dict[str, Any] here
-    because the session store dates from before AnalysisResponse was
-    a first-class schema and migrating every write site is Phase 3
-    polish, not P1 work.
+    that the analyze endpoint emitted. The `extended` field carries the
+    chart payload used by the frontend analytic pages.
     """
 
+    analysis_id: str | None = None
     session_id: str
     subject_id: str
     study_id: str
@@ -49,6 +48,7 @@ class SessionDetail(BaseModel):
     notes: str | None = None
     markers_summary: dict[str, Any] | None = None
     result: dict[str, Any]
+    extended: dict[str, Any] | None = None
 
 
 class CsvTimestampRange(BaseModel):

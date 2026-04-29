@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "polar-emotibit-analyzer-backend"
 version = "2.1.0"
 description = "File-only post-hoc analyzer for pre-synched Polar H10 + EmotiBit sessions."
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 authors = [
     { name = "COGS 160 Lab", email = "dkirsh@ucsd.edu" },

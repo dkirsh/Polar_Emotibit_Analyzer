@@ -68,10 +68,30 @@ export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, hei
 // ---------------- Charts ----------------
 
 function TimeseriesOverlay({ session, width, height }: { session: StoredSession; width: number; height: number }) {
+  const ptsRaw = session.extended?.cleaned_timeseries ?? [];
+  const hasHr = ptsRaw.some((p) => safe(p.hr_bpm as number | null | undefined) !== null);
+  const hasEda = ptsRaw.some((p) => safe(p.eda_us as number | null | undefined) !== null);
+
+  if (hasHr && !hasEda) {
+    const pts = ptsRaw.filter(
+      (p) =>
+        safe(p.timestamp_ms as number | null | undefined) !== null &&
+        safe(p.hr_bpm as number | null | undefined) !== null,
+    );
+    return <SingleSeriesChart session={session} pts={pts} field="hr_bpm" label="HR (bpm)" color={PALETTE.hr} width={width} height={height} />;
+  }
+  if (hasEda && !hasHr) {
+    const pts = ptsRaw.filter(
+      (p) =>
+        safe(p.timestamp_ms as number | null | undefined) !== null &&
+        safe(p.eda_us as number | null | undefined) !== null,
+    );
+    return <SingleSeriesChart session={session} pts={pts} field="eda_us" label="EDA (uS)" color={PALETTE.eda} width={width} height={height} />;
+  }
+
   // Filter out any point whose hr_bpm, eda_us, or timestamp_ms is
   // null / NaN / ±Infinity — these would otherwise propagate into
   // Math.min / Math.max and produce NaN SVG coordinates.
-  const ptsRaw = session.extended?.cleaned_timeseries ?? [];
   const pts = ptsRaw.filter(
     (p) =>
       safe(p.timestamp_ms as number | null | undefined) !== null &&
@@ -85,6 +105,8 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
   const eda = pts.map((p) => p.eda_us!);
   const hrMin = Math.min(...hr), hrMax = Math.max(...hr);
   const edaMin = Math.min(...eda), edaMax = Math.max(...eda);
+  const hrPeak = maxIndex(hr);
+  const edaPeak = maxIndex(eda);
   const pad = 30;
   const w = width - pad * 2;
   const hTop = height * 0.48;
@@ -96,18 +118,68 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
   const edaPath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${toX(p.timestamp_ms!).toFixed(1)},${toYEDA(p.eda_us!).toFixed(1)}`).join(" ");
   return (
     <svg width={width} height={height} role="img" aria-label="HR and EDA timeseries overlay">
-      <rect width={width} height={height} fill={PALETTE.bg} />
-      {/* HR panel */}
+	      <rect width={width} height={height} fill={PALETTE.bg} />
+      <EventLinesMs session={session} t0={t0} t1={t1} toX={toX} y1={pad} y2={height - 20} width={width} />
+	      {/* HR panel */}
       <text x={pad} y={18} fill={PALETTE.hr} fontSize="12" fontWeight="600">HR (bpm)</text>
       <text x={pad} y={33} fill={PALETTE.sub} fontSize="10">{hrMin.toFixed(0)} – {hrMax.toFixed(0)}</text>
       <path d={hrPath} stroke={PALETTE.hr} strokeWidth={1.5} fill="none" />
+      <circle cx={toX(pts[hrPeak].timestamp_ms!)} cy={toYHR(hrMax)} r={4} fill={PALETTE.hr} stroke={PALETTE.text} strokeWidth={1} />
+      <text x={labelX(toX(pts[hrPeak].timestamp_ms!), width, 92)} y={Math.max(14, toYHR(hrMax) - 8)} fill={PALETTE.text} fontSize="10" fontWeight="700">
+        peak HR {hrMax.toFixed(0)}
+      </text>
       {/* EDA panel */}
       <text x={pad} y={pad + hTop + 36} fill={PALETTE.eda} fontSize="12" fontWeight="600">EDA (µS)</text>
       <text x={pad} y={pad + hTop + 50} fill={PALETTE.sub} fontSize="10">{edaMin.toFixed(2)} – {edaMax.toFixed(2)}</text>
       <path d={edaPath} stroke={PALETTE.eda} strokeWidth={1.5} fill="none" />
+      <circle cx={toX(pts[edaPeak].timestamp_ms!)} cy={toYEDA(edaMax)} r={4} fill={PALETTE.eda} stroke={PALETTE.text} strokeWidth={1} />
+      <text x={labelX(toX(pts[edaPeak].timestamp_ms!), width, 108)} y={Math.max(pad + hTop + 32, toYEDA(edaMax) - 8)} fill={PALETTE.text} fontSize="10" fontWeight="700">
+        peak EDA {edaMax.toFixed(2)}
+      </text>
       {/* Axes */}
       <text x={pad} y={height - 5} fill={PALETTE.sub} fontSize="10">0 s</text>
       <text x={width - pad - 40} y={height - 5} fill={PALETTE.sub} fontSize="10">{((t1 - t0) / 1000).toFixed(0)} s</text>
+    </svg>
+  );
+}
+
+function SingleSeriesChart({
+  session, pts, field, label, color, width, height,
+}: {
+  session: StoredSession;
+  pts: Array<Record<string, number | undefined>>;
+  field: "hr_bpm" | "eda_us";
+  label: string;
+  color: string;
+  width: number;
+  height: number;
+}) {
+  if (pts.length < 2) return <Empty msg={`Not enough ${label} data`} />;
+  const t0 = pts[0].timestamp_ms!;
+  const t1 = pts[pts.length - 1].timestamp_ms!;
+  const vals = pts.map((p) => p[field] as number);
+  const vMin = Math.min(...vals), vMax = Math.max(...vals);
+  const peak = maxIndex(vals);
+  const pad = 40;
+  const w = width - pad * 2;
+  const h = height - pad * 2;
+  const toX = (t: number) => pad + ((t - t0) / (t1 - t0 || 1)) * w;
+  const toY = (v: number) => pad + ((vMax - v) / (vMax - vMin || 1)) * h;
+  const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${toX(p.timestamp_ms!).toFixed(1)},${toY(p[field] as number).toFixed(1)}`).join(" ");
+  return (
+    <svg width={width} height={height} role="img" aria-label={label}>
+	      <rect width={width} height={height} fill={PALETTE.bg} />
+      <EventLinesMs session={session} t0={t0} t1={t1} toX={toX} y1={pad} y2={pad + h} width={width} />
+	      <text x={pad} y={24} fill={color} fontSize="12" fontWeight="600">{label}</text>
+      <text x={pad} y={40} fill={PALETTE.sub} fontSize="10">{vMin.toFixed(2)} - {vMax.toFixed(2)}</text>
+      <path d={path} stroke={color} strokeWidth={1.6} fill="none" />
+      <circle cx={toX(pts[peak].timestamp_ms!)} cy={toY(vMax)} r={4} fill={color} stroke={PALETTE.text} strokeWidth={1} />
+      <text x={labelX(toX(pts[peak].timestamp_ms!), width, 100)} y={Math.max(18, toY(vMax) - 8)} fill={PALETTE.text} fontSize="10" fontWeight="700">
+        peak {vMax.toFixed(field === "hr_bpm" ? 0 : 2)}
+      </text>
+      <line x1={pad} y1={pad + h} x2={pad + w} y2={pad + h} stroke={PALETTE.grid} />
+      <text x={pad} y={height - 8} fill={PALETTE.sub} fontSize="10">0 s</text>
+      <text x={width - pad - 44} y={height - 8} fill={PALETTE.sub} fontSize="10">{((t1 - t0) / 1000).toFixed(0)} s</text>
     </svg>
   );
 }
@@ -161,6 +233,7 @@ function SpectrumChart({ session, width, height }: { session: StoredSession; wid
   const toX = (hz: number) => pad + (hz / fMax) * w;
   const toY = (lp: number) => pad + ((pMax - lp) / (pMax - pMin || 1)) * h;
   const path = fVis.map((hz, i) => `${i === 0 ? "M" : "L"}${toX(hz).toFixed(1)},${toY(pVis[i]).toFixed(1)}`).join(" ");
+  const fs = session.result.feature_summary;
   const bands = [
     { lo: 0.003, hi: 0.04, label: "VLF", color: "#8B5CF6" },
     { lo: 0.04, hi: 0.15, label: "LF", color: "#3B82F6" },
@@ -181,6 +254,14 @@ function SpectrumChart({ session, width, height }: { session: StoredSession; wid
       <text x={pad} y={height - 10} fill={PALETTE.sub} fontSize="10">0 Hz</text>
       <text x={width - pad - 24} y={height - 10} fill={PALETTE.sub} fontSize="10">0.5 Hz</text>
       <text x={4} y={pad + 6} fill={PALETTE.sub} fontSize="10">log₁₀ PSD</text>
+      <text x={pad} y={24} fill={PALETTE.text} fontSize="11" fontWeight="700">
+        LF/HF {fs.lf_hf_ratio == null ? "unavailable" : fs.lf_hf_ratio.toFixed(2)}
+      </text>
+      {fs.lf_ms2 != null && fs.hf_ms2 != null && (
+        <text x={pad} y={40} fill={PALETTE.sub} fontSize="10">
+          LF {fs.lf_ms2.toFixed(1)} ms2 · HF {fs.hf_ms2.toFixed(1)} ms2
+        </text>
+      )}
     </svg>
   );
 }
@@ -210,11 +291,21 @@ function LineChart({ session, width, height }: { session: StoredSession; width: 
     current = current ? current + " " + c : c;
   }
   if (current) segs.push(current);
+  const peakIndex = data.y.findIndex((v) => v === yMax);
   return (
     <svg width={width} height={height} role="img" aria-label={data.label}>
-      <rect width={width} height={height} fill={PALETTE.bg} />
-      <text x={pad} y={20} fill={data.color} fontSize="12" fontWeight="600">{data.label}</text>
+	      <rect width={width} height={height} fill={PALETTE.bg} />
+      <EventLinesSeconds session={session} xMin={xMin} xMax={xMax} toX={toX} y1={pad} y2={pad + H} width={width} />
+	      <text x={pad} y={20} fill={data.color} fontSize="12" fontWeight="600">{data.label}</text>
       {segs.map((path, i) => <path key={i} d={path} stroke={data.color} strokeWidth={1.8} fill="none" />)}
+      {peakIndex >= 0 && (
+        <>
+          <circle cx={toX(data.x[peakIndex])} cy={toY(yMax)} r={4} fill={data.color} stroke={PALETTE.text} strokeWidth={1} />
+          <text x={labelX(toX(data.x[peakIndex]), width, 108)} y={Math.max(18, toY(yMax) - 8)} fill={PALETTE.text} fontSize="10" fontWeight="700">
+            peak {yMax.toFixed(2)}
+          </text>
+        </>
+      )}
       <line x1={pad} y1={pad + H} x2={pad + W} y2={pad + H} stroke={PALETTE.grid} />
       <text x={pad} y={pad + H + 14} fill={PALETTE.sub} fontSize="10">{xMin.toFixed(0)} s</text>
       <text x={pad + W - 30} y={pad + H + 14} fill={PALETTE.sub} fontSize="10">{xMax.toFixed(0)} s</text>
@@ -230,6 +321,12 @@ function Tachogram({ session, width, height }: { session: StoredSession; width: 
   const pad = 40;
   const W = width - pad * 2, H = height - pad * 2;
   const rMin = Math.min(...rr), rMax = Math.max(...rr);
+  const med = median(rr);
+  const jumpThreshold = Math.max(250, med * 0.25);
+  const jumps = rr
+    .map((v, i) => ({ v, i, jump: i === 0 ? 0 : Math.abs(v - rr[i - 1]) }))
+    .filter((p) => p.jump > jumpThreshold)
+    .slice(0, 20);
   const toX = (i: number) => pad + (i / (rr.length - 1)) * W;
   const toY = (v: number) => pad + ((rMax - v) / (rMax - rMin || 1)) * H;
   const path = rr.map((v, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(" ");
@@ -237,8 +334,14 @@ function Tachogram({ session, width, height }: { session: StoredSession; width: 
     <svg width={width} height={height} role="img" aria-label="RR tachogram">
       <rect width={width} height={height} fill={PALETTE.bg} />
       <path d={path} stroke={PALETTE.hr} strokeWidth={1.2} fill="none" />
+      {jumps.map((p) => (
+        <circle key={p.i} cx={toX(p.i)} cy={toY(p.v)} r={3.5} fill={PALETTE.bad} stroke={PALETTE.text} strokeWidth={0.8} />
+      ))}
       <line x1={pad} y1={toY(1000)} x2={pad + W} y2={toY(1000)} stroke={PALETTE.grid} strokeDasharray="3,3" />
       <text x={pad + 4} y={toY(1000) - 4} fill={PALETTE.sub} fontSize="10">1000 ms (= 60 bpm)</text>
+      <text x={pad} y={22} fill={PALETTE.text} fontSize="11" fontWeight="700">
+        {jumps.length} abrupt jump{jumps.length === 1 ? "" : "s"} highlighted
+      </text>
       <text x={6} y={pad + 6} fill={PALETTE.sub} fontSize="10">{rMax.toFixed(0)} ms</text>
       <text x={6} y={pad + H} fill={PALETTE.sub} fontSize="10">{rMin.toFixed(0)} ms</text>
       <text x={pad} y={height - 8} fill={PALETTE.sub} fontSize="10">beat 0</text>
@@ -330,6 +433,8 @@ function Histogram({ session, width, height }: { session: StoredSession; width: 
     if (v >= lo && v < hi) counts[Math.min(bins - 1, Math.floor(((v - lo) / (hi - lo)) * bins))]++;
   }
   const maxC = Math.max(...counts);
+  const med = median(rr);
+  const outside = rr.filter((v) => v < lo || v > hi).length;
   const pad = 40;
   const W = width - pad * 2, H = height - pad * 2;
   const bw = W / bins;
@@ -341,9 +446,13 @@ function Histogram({ session, width, height }: { session: StoredSession; width: 
       ))}
       <line x1={pad + ((600 - lo) / (hi - lo)) * W} y1={pad} x2={pad + ((600 - lo) / (hi - lo)) * W} y2={pad + H} stroke={PALETTE.eda} strokeDasharray="3,3" />
       <line x1={pad + ((1000 - lo) / (hi - lo)) * W} y1={pad} x2={pad + ((1000 - lo) / (hi - lo)) * W} y2={pad + H} stroke={PALETTE.eda} strokeDasharray="3,3" />
+      <line x1={pad + ((med - lo) / (hi - lo)) * W} y1={pad} x2={pad + ((med - lo) / (hi - lo)) * W} y2={pad + H} stroke={PALETTE.text} strokeWidth={2} />
+      <text x={labelX(pad + ((med - lo) / (hi - lo)) * W, width, 110)} y={pad + 28} fill={PALETTE.text} fontSize="10" fontWeight="700">
+        median {med.toFixed(0)} ms
+      </text>
       <text x={pad} y={height - 8} fill={PALETTE.sub} fontSize="10">300 ms</text>
       <text x={width - pad - 40} y={height - 8} fill={PALETTE.sub} fontSize="10">2000 ms</text>
-      <text x={pad + 4} y={pad + 12} fill={PALETTE.sub} fontSize="10">count (max={maxC})</text>
+      <text x={pad + 4} y={pad + 12} fill={PALETTE.sub} fontSize="10">count (max={maxC}) · outside bounds {outside}</text>
     </svg>
   );
 }
@@ -556,9 +665,10 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
   const rpmBandBot = toYRpm(Math.max(12, rpmMin));
 
   return (
-    <svg width={width} height={height} role="img" aria-label="ECG-derived respiration">
-      <rect width={width} height={height} fill={PALETTE.bg} />
-      {/* RPM panel */}
+	    <svg width={width} height={height} role="img" aria-label="ECG-derived respiration">
+	      <rect width={width} height={height} fill={PALETTE.bg} />
+      <EventLinesSeconds session={session} xMin={tMin} xMax={tMax} toX={toX} y1={pad} y2={height - 22} width={width} />
+	      {/* RPM panel */}
       <text x={pad} y={pad - 8} fill={PALETTE.resp} fontSize="12" fontWeight="600">Breathing rate (RPM)</text>
       <rect x={pad} y={rpmBandTop} width={W} height={Math.max(0, rpmBandBot - rpmBandTop)} fill={PALETTE.resp} opacity={0.08} />
       <text x={pad + W - 100} y={rpmBandTop + 14} fill={PALETTE.sub} fontSize="10">12–20 RPM normal</text>
@@ -624,16 +734,19 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
 
   // Stress composite line (total)
   const stressLine = t.map((tv, i) => `${i === 0 ? "M" : "L"}${toX(tv).toFixed(1)},${toY(stress[i]).toFixed(1)}`).join(" ");
+  const peakIndex = maxIndex(stress);
+  const peak = stress[peakIndex] ?? 0;
 
   // Reference band boundaries
   const lowY = toY(0.25);
   const highY = toY(0.50);
 
   return (
-    <svg width={width} height={height} role="img" aria-label="Stress composite trajectory">
-      <rect width={width} height={height} fill={PALETTE.bg} />
+	    <svg width={width} height={height} role="img" aria-label="Stress composite trajectory">
+	      <rect width={width} height={height} fill={PALETTE.bg} />
+      <EventLinesSeconds session={session} xMin={tMin} xMax={tMax} toX={toX} y1={pad} y2={pad + H} width={width} />
 
-      {/* Reference bands */}
+	      {/* Reference bands */}
       <rect x={pad} y={pad} width={W} height={highY - pad} fill={PALETTE.bad} opacity={0.06} />
       <rect x={pad} y={lowY} width={W} height={pad + H - lowY} fill={PALETTE.good} opacity={0.06} />
 
@@ -652,6 +765,10 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
 
       {/* Total stress line */}
       <path d={stressLine} stroke={PALETTE.text} strokeWidth={2} fill="none" />
+      <circle cx={toX(t[peakIndex])} cy={toY(peak)} r={4.5} fill={PALETTE.text} stroke={PALETTE.bg} strokeWidth={1.5} />
+      <text x={labelX(toX(t[peakIndex]), width, 112)} y={Math.max(18, toY(peak) - 8)} fill={PALETTE.text} fontSize="10" fontWeight="700">
+        peak stress {peak.toFixed(3)}
+      </text>
 
       {/* Legend */}
       {channels.map((ch, i) => (
@@ -676,10 +793,119 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
       <text x={pad} y={20} fill={PALETTE.text} fontSize="12" fontWeight="600">Stress composite (windowed)</text>
       <text x={pad + 220} y={20} fill={PALETTE.sub} fontSize="10">
         mean={stress.length > 0 ? (stress.reduce((a, b) => a + b, 0) / stress.length).toFixed(3) : "—"}
-        {" "}peak={stress.length > 0 ? Math.max(...stress).toFixed(3) : "—"}
+        {" "}peak={stress.length > 0 ? peak.toFixed(3) : "—"}
       </text>
     </svg>
   );
+}
+
+type EventMarker = { event_code: string; utc_ms: number; note?: string };
+
+function sessionEvents(session: StoredSession): EventMarker[] {
+  return (session.markers_summary?.event_markers ?? [])
+    .filter((e) => typeof e.utc_ms === "number" && Number.isFinite(e.utc_ms))
+    .slice(0, 20);
+}
+
+function EventLinesMs({
+  session, t0, t1, toX, y1, y2, width,
+}: {
+  session: StoredSession;
+  t0: number;
+  t1: number;
+  toX: (t: number) => number;
+  y1: number;
+  y2: number;
+  width: number;
+}) {
+  const events = sessionEvents(session).filter((e) => e.utc_ms >= t0 && e.utc_ms <= t1);
+  if (events.length === 0) return null;
+  return (
+    <g aria-label="Event markers">
+      {events.map((event, i) => {
+        const x = toX(event.utc_ms);
+        return (
+          <g key={`${event.event_code}-${event.utc_ms}-${i}`}>
+            <line x1={x} y1={y1} x2={x} y2={y2} stroke={PALETTE.accent} strokeWidth={1.4} strokeDasharray="4,3" opacity={0.85} />
+            <text x={labelX(x, width, 118)} y={y1 + 11 + (i % 3) * 12} fill={PALETTE.accent} fontSize="9" fontWeight="700">
+              {eventLabel(event.event_code)}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function EventLinesSeconds({
+  session, xMin, xMax, toX, y1, y2, width,
+}: {
+  session: StoredSession;
+  xMin: number;
+  xMax: number;
+  toX: (t: number) => number;
+  y1: number;
+  y2: number;
+  width: number;
+}) {
+  const origin = sessionTimeOriginMs(session);
+  const events = sessionEvents(session)
+    .map((event) => ({ ...event, t_s: eventSecond(event.utc_ms, origin, xMin, xMax) }))
+    .filter((event) => event.t_s >= xMin && event.t_s <= xMax);
+  if (events.length === 0) return null;
+  return (
+    <g aria-label="Event markers">
+      {events.map((event, i) => {
+        const x = toX(event.t_s);
+        return (
+          <g key={`${event.event_code}-${event.utc_ms}-${i}`}>
+            <line x1={x} y1={y1} x2={x} y2={y2} stroke={PALETTE.accent} strokeWidth={1.4} strokeDasharray="4,3" opacity={0.85} />
+            <text x={labelX(x, width, 118)} y={y1 + 11 + (i % 3) * 12} fill={PALETTE.accent} fontSize="9" fontWeight="700">
+              {eventLabel(event.event_code)}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function sessionTimeOriginMs(session: StoredSession): number | null {
+  const first = session.extended?.cleaned_timeseries?.find((p) => typeof p.timestamp_ms === "number");
+  return typeof first?.timestamp_ms === "number" ? first.timestamp_ms : null;
+}
+
+function eventSecond(utcMs: number, originMs: number | null, xMin: number, xMax: number): number {
+  const relativeS = utcMs / 1000;
+  if (relativeS >= xMin && relativeS <= xMax) return relativeS;
+  return originMs == null ? relativeS : (utcMs - originMs) / 1000;
+}
+
+function eventLabel(code: string): string {
+  return code
+    .replace(/^stress_task_/, "task_")
+    .replace(/^recording_/, "rec_")
+    .replace(/_/g, " ");
+}
+
+function maxIndex(values: number[]): number {
+  if (values.length === 0) return 0;
+  let best = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] > values[best]) best = i;
+  }
+  return best;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function labelX(x: number, width: number, labelWidth: number): number {
+  return Math.max(8, Math.min(x + 8, width - labelWidth));
 }
 
 const cellHead: React.CSSProperties = { textAlign: "left", padding: "8px 10px", color: PALETTE.hr, borderBottom: `1px solid ${PALETTE.grid}`, fontWeight: 600 };

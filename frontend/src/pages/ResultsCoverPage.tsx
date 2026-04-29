@@ -19,8 +19,14 @@ export const ResultsCoverPage: React.FC = () => {
     getSession(sessionId).then(setSession).catch((e) => setError((e as Error).message));
   }, [sessionId]);
 
-  if (error) return <main className="page"><div className="error-banner">{error}</div><Link to="/">← back</Link></main>;
-  if (!session) return <main className="page">Loading…</main>;
+  if (error) return (
+    <main className="page">
+      <div className="error-banner">{error}</div>
+      <div className="notice">Run a new analysis first, then use the exact Session ID shown in the form and recent-sessions table.</div>
+      <Link to="/" style={{ color: "#00C896" }}>← back</Link>
+    </main>
+  );
+  if (!session) return <main className="page"><div className="loading-panel">Reading saved analysis session…</div></main>;
 
   const r = session.result;
   const band = r.sync_qc_band;
@@ -142,8 +148,8 @@ export const ResultsCoverPage: React.FC = () => {
         </a>
       </div>
 
-      <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <Link to="/" style={{ color: "#00C896" }}>← New analysis</Link>
+      <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <Link to="/" className="download-btn">Add / replace files</Link>
         <div style={{ fontSize: 12, color: "#6B6B6B" }}>Cover page · {session.session_id}</div>
       </div>
     </main>

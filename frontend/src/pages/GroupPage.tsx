@@ -16,13 +16,25 @@ import {
 export const GroupPage: React.FC = () => {
   const { sessionId, groupId } = useParams<{ sessionId: string; groupId: AnalyticGroup }>();
   const [session, setSession] = useState<StoredSession | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
-    getSession(sessionId).then(setSession).catch(() => {});
+    setError(null);
+    getSession(sessionId).then(setSession).catch((e) => setError((e as Error).message));
   }, [sessionId]);
 
-  if (!session || !groupId) return <main className="page">Loading…</main>;
+  if (error) return (
+    <main className="page">
+      <div className="error-banner">{error}</div>
+      <div className="notice">
+        Use the exact Session ID from the analysis form after the pipeline has completed. Placeholder URLs such as
+        {" "}<code>YOUR_SESSION_ID</code> cannot load charts because there is no saved session under that name.
+      </div>
+      <Link to="/" style={{ color: "#00C896" }}>← New analysis</Link>
+    </main>
+  );
+  if (!session || !groupId) return <main className="page"><div className="loading-panel">Reading saved analysis session…</div></main>;
   const meta = GROUP_META[groupId];
 
   const cardStyle = (size: "sm" | "md"): React.CSSProperties => ({
@@ -39,11 +51,17 @@ export const GroupPage: React.FC = () => {
 
   return (
     <main className="page">
-      <div style={{ marginBottom: 18 }}>
-        <Link to={`/results/${encodeURIComponent(session.session_id)}`} style={{ color: "#00C896", fontSize: 13 }}>
-          ← Cover
+      <nav aria-label="Breadcrumb" style={{ marginBottom: 18, display: "flex", gap: 12, alignItems: "center", fontSize: 13 }}>
+        <Link to="/" style={{ color: "#00C896" }}>
+          Home
         </Link>
-      </div>
+        <span style={{ color: "#6B6B6B" }}>/</span>
+        <Link to={`/results/${encodeURIComponent(session.session_id)}`} style={{ color: "#00C896", fontSize: 13 }}>
+          Cover
+        </Link>
+        <span style={{ color: "#6B6B6B" }}>/</span>
+        <span style={{ color: "#6B6B6B" }}>{meta.title}</span>
+      </nav>
 
       <div style={{ marginBottom: 26 }}>
         <div style={{ fontSize: 26, color: meta.hue }}>{meta.icon}</div>

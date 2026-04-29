@@ -31,7 +31,7 @@ if [ ! -d ".venv" ]; then
 fi
 
 echo "📦  Installing backend dependencies…"
-.venv/bin/pip install -q -r requirements.txt 2>/dev/null || true
+.venv/bin/pip install -q -e ".[dev]"
 
 echo "🚀  Starting backend (FastAPI) on http://localhost:8000"
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload &

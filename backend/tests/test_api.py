@@ -102,6 +102,44 @@ def test_validate_polar_csv_accepts_raw_ecg():
     assert "computed in-app" in body["rr_source_note"]
 
 
+def test_validate_markers_csv_reports_event_codes():
+    markers = b"session_id,event_code,utc_ms,note\nS1,recording_start,1000,start\nS1,stress_task_start,2000,task\n"
+    r = client.post(
+        "/api/v1/validate/csv/markers",
+        files={"file": ("event_markers.csv", markers, "text/csv")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["valid"] is True
+    assert body["n_events"] == 2
+    assert body["event_codes"] == ["recording_start", "stress_task_start"]
+    assert body["timestamp_range_ms"]["span_s"] == 1
+
+
+def test_analyze_stores_event_marker_timestamps():
+    em_bytes, pol_bytes = _synthetic_csvs(90)
+    markers = b"session_id,event_code,utc_ms,note\nTEST_MARKERS,recording_start,0,start\nTEST_MARKERS,stress_task_start,30000,task\n"
+    r = client.post(
+        "/api/v1/analyze",
+        files={
+            "emotibit_file": ("em.csv", em_bytes, "text/csv"),
+            "polar_file": ("pol.csv", pol_bytes, "text/csv"),
+            "markers_file": ("event_markers.csv", markers, "text/csv"),
+        },
+        data={
+            "session_id": "TEST_MARKERS",
+            "subject_id": "P01",
+            "study_id": "STUDY01",
+            "session_date": "2026-04-20",
+        },
+    )
+    assert r.status_code == 200, r.text
+    detail = client.get("/api/v1/sessions/TEST_MARKERS").json()
+    events = detail["markers_summary"]["event_markers"]
+    assert events[0]["event_code"] == "recording_start"
+    assert events[1]["utc_ms"] == 30000
+
+
 def test_validate_emotibit_csv_rejects_missing_columns():
     bad = b"timestamp_ms,not_eda\n0,1.0\n1000,1.1\n"
     r = client.post(
@@ -162,6 +200,50 @@ def test_analyze_accepts_raw_ecg_polar_csv():
     assert body["feature_summary"]["rmssd_ms"] >= 0
 
 
+def test_analyze_single_polar_saves_chart_bundle():
+    _, pol_bytes = _synthetic_csvs(180)
+    r = client.post(
+        "/api/v1/analyze/single",
+        files={"file": ("pol.csv", pol_bytes, "text/csv")},
+        data={
+            "source_type": "polar",
+            "session_id": "TEST_SINGLE_POLAR",
+            "subject_id": "P01",
+            "study_id": "STUDY01",
+            "session_date": "2026-04-20",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sync_qc_gate"] == "single_file"
+    assert body["feature_summary"]["mean_hr_bpm"] > 0
+    detail = client.get("/api/v1/sessions/TEST_SINGLE_POLAR").json()
+    assert detail["extended"]["analysis_mode"] == "polar_only"
+    assert detail["extended"]["rr_series_ms"]
+
+
+def test_analyze_single_emotibit_saves_chart_bundle():
+    em_bytes, _ = _synthetic_csvs(180)
+    r = client.post(
+        "/api/v1/analyze/single",
+        files={"file": ("em.csv", em_bytes, "text/csv")},
+        data={
+            "source_type": "emotibit",
+            "session_id": "TEST_SINGLE_EMOTIBIT",
+            "subject_id": "P01",
+            "study_id": "STUDY01",
+            "session_date": "2026-04-20",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sync_qc_gate"] == "single_file"
+    assert body["feature_summary"]["eda_mean_us"] > 0
+    detail = client.get("/api/v1/sessions/TEST_SINGLE_EMOTIBIT").json()
+    assert detail["extended"]["analysis_mode"] == "emotibit_only"
+    assert detail["extended"]["cleaned_timeseries"]
+
+
 def test_analyze_missing_metadata_returns_422():
     em_bytes, pol_bytes = _synthetic_csvs(60)
     r = client.post(
@@ -206,6 +288,8 @@ def test_session_detail_returns_full_result():
     assert body["session_id"] == "TEST_LIST_01"
     assert "result" in body
     assert body["result"]["feature_summary"]["rmssd_ms"] > 0
+    assert body["extended"] is not None
+    assert body["extended"]["cleaned_timeseries"]
 
 
 def test_session_detail_404_for_unknown():

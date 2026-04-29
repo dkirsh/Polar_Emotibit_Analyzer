@@ -8,7 +8,7 @@ export type FeatureSummary = {
   eda_mean_us: number;
   eda_phasic_index: number;
   stress_score: number;
-  rr_source: "native_polar" | "derived_from_ecg" | "derived_from_bpm";
+  rr_source: "native_polar" | "derived_from_ecg" | "derived_from_bpm" | "none";
   vlf_ms2: number | null;
   lf_ms2: number | null;
   hf_ms2: number | null;
@@ -52,8 +52,8 @@ export type AnalysisResponse = {
   report_markdown: string;
   non_diagnostic_notice: string;
   sync_qc_score: number;
-  sync_qc_band: "green" | "yellow" | "red";
-  sync_qc_gate: "go" | "conditional_go" | "no_go";
+  sync_qc_band: "green" | "yellow" | "red" | "unknown";
+  sync_qc_gate: "go" | "conditional_go" | "no_go" | "single_file" | "unknown";
   sync_qc_failure_reasons: string[];
 };
 
@@ -83,9 +83,10 @@ export type ValidateMarkersResponse = {
   valid: true;
   filename: string;
   n_rows: number;
-  codes_present: string[];
-  unknown_codes: string[];
-  sessions: string[];
+  columns_present: string[];
+  timestamp_range_ms?: { min: number; max: number; span_s: number } | null;
+  event_codes: string[] | null;
+  n_events: number | null;
 };
 
 export type RecentSession = {
@@ -93,7 +94,7 @@ export type RecentSession = {
   subject_id: string;
   session_date: string;
   analyzed_at: string;
-  sync_qc_gate: "go" | "conditional_go" | "no_go";
+  sync_qc_gate: "go" | "conditional_go" | "no_go" | "single_file" | "unknown";
   sync_qc_score: number;
 };
 
@@ -150,9 +151,10 @@ export type InferenceStats = {
 };
 
 export type ExtendedAnalytics = {
-  stress_decomposition: StressDecomposition;
-  windowed: WindowedFeatures;
-  spectral_trajectory: SpectralTrajectory;
+  analysis_mode?: "paired" | "polar_only" | "emotibit_only";
+  stress_decomposition: StressDecomposition | null;
+  windowed: WindowedFeatures | null;
+  spectral_trajectory: SpectralTrajectory | null;
   psd: PsdData;
   rr_series_ms: number[];
   descriptive_stats: DescriptiveStats;
@@ -177,7 +179,12 @@ export type StoredSession = {
   operator?: string;
   notes?: string;
   analyzed_at: string;
-  markers_summary?: { n_rows?: number; codes?: string[]; error?: string } | null;
+  markers_summary?: {
+    n_rows?: number;
+    codes?: string[];
+    event_markers?: Array<{ event_code: string; utc_ms: number; note?: string }>;
+    error?: string;
+  } | null;
   result: AnalysisResponse;
   extended: ExtendedAnalytics | null;
 };
@@ -187,17 +194,20 @@ type ValidateResponse =
   | ValidatePolarResponse
   | ValidateMarkersResponse;
 
+async function readError(r: Response): Promise<string> {
+  const err = await r.json().catch(() => ({ detail: r.statusText }));
+  if (typeof err.detail === "string") return err.detail;
+  if (err.detail?.reason) return err.detail.reason;
+  if (err.detail?.message) return err.detail.message;
+  return JSON.stringify(err.detail ?? err);
+}
+
 async function postFile<T>(path: string, file: File): Promise<T> {
   const body = new FormData();
   body.append("file", file);
   const r = await fetch(path, { method: "POST", body });
   if (!r.ok) {
-    const err = await r.json().catch(() => ({ detail: r.statusText }));
-    const reason =
-      typeof err.detail === "string"
-        ? err.detail
-        : err.detail?.reason ?? JSON.stringify(err.detail);
-    throw new Error(reason);
+    throw new Error(await readError(r));
   }
   return (await r.json()) as T;
 }
@@ -224,6 +234,17 @@ export type AnalyzePayload = {
   notes?: string;
 };
 
+export type AnalyzeSinglePayload = {
+  file: File;
+  source_type: "polar" | "emotibit";
+  session_id: string;
+  subject_id: string;
+  study_id: string;
+  session_date: string;
+  operator?: string;
+  notes?: string;
+};
+
 export async function analyze(payload: AnalyzePayload): Promise<AnalysisResponse> {
   const body = new FormData();
   body.append("emotibit_file", payload.emotibit_file);
@@ -237,8 +258,24 @@ export async function analyze(payload: AnalyzePayload): Promise<AnalysisResponse
   if (payload.notes) body.append("notes", payload.notes);
   const r = await fetch("/api/v1/analyze", { method: "POST", body });
   if (!r.ok) {
-    const err = await r.json().catch(() => ({ detail: r.statusText }));
-    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+    throw new Error(await readError(r));
+  }
+  return (await r.json()) as AnalysisResponse;
+}
+
+export async function analyzeSingle(payload: AnalyzeSinglePayload): Promise<AnalysisResponse> {
+  const body = new FormData();
+  body.append("file", payload.file);
+  body.append("source_type", payload.source_type);
+  body.append("session_id", payload.session_id);
+  body.append("subject_id", payload.subject_id);
+  body.append("study_id", payload.study_id);
+  body.append("session_date", payload.session_date);
+  if (payload.operator) body.append("operator", payload.operator);
+  if (payload.notes) body.append("notes", payload.notes);
+  const r = await fetch("/api/v1/analyze/single", { method: "POST", body });
+  if (!r.ok) {
+    throw new Error(await readError(r));
   }
   return (await r.json()) as AnalysisResponse;
 }
@@ -251,7 +288,12 @@ export async function listRecentSessions(limit = 10): Promise<RecentSession[]> {
 
 export async function getSession(sessionId: string): Promise<StoredSession> {
   const r = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`);
-  if (!r.ok) throw new Error(`Session ${sessionId} not found`);
+  if (!r.ok) {
+    const detail = await readError(r);
+    throw new Error(
+      `No completed analysis found for session "${sessionId}". ${detail}`,
+    );
+  }
   return (await r.json()) as StoredSession;
 }
 

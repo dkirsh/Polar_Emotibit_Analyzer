@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,9 +19,11 @@ from typing import Any, Optional
 import pandas as pd
 from fastapi import APIRouter, Form, HTTPException, Response, UploadFile, status
 
+from app.services.ai.adapters import NON_DIAGNOSTIC_NOTICE
 from app.schemas.analysis import (
     AnalysisResponse,
     BlandAltmanMetric,
+    FeatureSummary,
     SessionDetail,
     SessionSummary,
 )
@@ -35,13 +38,22 @@ from app.services.processing.extended_analytics import (
     decompose_stress,
 )
 from app.services.processing.features import _get_rr_intervals, compute_edr
+from app.services.processing.features import (
+    compute_eda_features,
+    compute_hrv_features,
+    compute_hrv_frequency_features,
+    compute_poincare_features,
+    compute_time_domain_features,
+)
 from app.services.processing.kubios_benchmark import compare_with_kubios
 from app.services.processing.pipeline import InsufficientDataError, run_analysis
 from app.services.processing.statistics import compute_inference_summary, compute_summary_stats
 from app.services.processing.sync import synchronize_signals
+from app.services.reporting.report_builder import build_markdown_report
 
 
 router = APIRouter(tags=["analysis"])
+log = logging.getLogger(__name__)
 
 
 # ----- In-process session store ------------------------------------------
@@ -63,8 +75,15 @@ def _load_store_from_disk() -> None:
 
 
 def _persist_store() -> None:
-    _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _STORE_PATH.write_text(json.dumps(_SESSION_STORE, indent=2, default=str))
+    try:
+        _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _STORE_PATH.write_text(json.dumps(_SESSION_STORE, indent=2, default=str))
+    except OSError as exc:
+        # The in-memory store is already updated before this function is
+        # called, so a local filesystem permission failure should not turn
+        # a successful analysis into a failed upload. The session will be
+        # available until the backend process exits.
+        log.warning("Could not persist session store to %s: %s", _STORE_PATH, exc)
 
 
 _load_store_from_disk()
@@ -115,9 +134,23 @@ async def analyze(
         try:
             mk_text = (await markers_file.read()).decode("utf-8", errors="replace")
             mk_df = pd.read_csv(io.StringIO(mk_text))
+            event_markers: list[dict[str, Any]] = []
+            if {"event_code", "utc_ms"}.issubset(set(mk_df.columns)):
+                for row in mk_df.to_dict(orient="records"):
+                    try:
+                        event_markers.append(
+                            {
+                                "event_code": str(row.get("event_code", "")),
+                                "utc_ms": int(row.get("utc_ms")),
+                                "note": str(row.get("note", "")) if "note" in row and pd.notna(row.get("note")) else "",
+                            }
+                        )
+                    except Exception:
+                        continue
             markers_summary = {
                 "n_rows": int(len(mk_df)),
                 "codes": sorted(set(mk_df.get("event_code", pd.Series()).astype(str).tolist())),
+                "event_markers": event_markers,
             }
         except Exception:  # noqa: BLE001
             markers_summary = {"error": "markers file could not be parsed; ignored"}
@@ -258,6 +291,213 @@ async def analyze(
     _persist_store()
 
     return result
+
+
+@router.post("/analyze/single", response_model=AnalysisResponse)
+async def analyze_single(
+    file: UploadFile,
+    source_type: str = Form(...),
+    session_id: str = Form(...),
+    subject_id: str = Form(...),
+    study_id: str = Form(...),
+    session_date: str = Form(...),
+    operator: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+) -> AnalysisResponse:
+    """Run a one-sensor analysis for presentation and data inspection.
+
+    `source_type` is `polar` or `emotibit`. This endpoint deliberately
+    avoids cross-sensor synchronization and emits quality flags naming the
+    limits of a single-sensor interpretation.
+    """
+    mode = source_type.strip().lower()
+    if mode not in {"polar", "emotibit"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="source_type must be 'polar' or 'emotibit'",
+        )
+
+    try:
+        csv_text = (await file.read()).decode("utf-8", errors="replace")
+        if mode == "polar":
+            df = parse_polar_csv(csv_text)
+            result, extended = _build_polar_only_result(df)
+        else:
+            df = parse_emotibit_csv(csv_text)
+            result, extended = _build_emotibit_only_result(df)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"CSV schema validation failed: {exc}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Single-file analysis error: {exc.__class__.__name__}: {exc}",
+        )
+
+    analysis_id = str(uuid.uuid4())
+    stored = {
+        "analysis_id": analysis_id,
+        "session_id": session_id,
+        "subject_id": subject_id,
+        "study_id": study_id,
+        "session_date": session_date,
+        "operator": operator,
+        "notes": notes,
+        "analyzed_at": datetime.now(tz=timezone.utc).isoformat(),
+        "markers_summary": None,
+        "analysis_mode": f"{mode}_only",
+        "result": result.model_dump() if hasattr(result, "model_dump") else result.dict(),
+        "extended": extended,
+    }
+    _SESSION_STORE[session_id] = stored
+    _persist_store()
+    return result
+
+
+def _build_polar_only_result(df: pd.DataFrame) -> tuple[AnalysisResponse, dict[str, Any]]:
+    rmssd_ms, sdnn_ms, mean_hr_bpm, rr_source = compute_hrv_features(df)
+    time_domain = compute_time_domain_features(df)
+    poincare = compute_poincare_features(df)
+    freq = compute_hrv_frequency_features(df)
+    rr_arr, rr_series_source = _get_rr_intervals(df)
+    quality_flags = [
+        "Polar-only analysis: HR and HRV charts are available; EDA, motion, stress, and synchronization charts require an EmotiBit file.",
+        f"RR source: {rr_source.replace('_', ' ')}",
+    ]
+    if len(df) < 50:
+        quality_flags.append("Low beat count for HRV (< 50 beats; RMSSD stability uncertain)")
+    feature_summary = FeatureSummary(
+        rmssd_ms=rmssd_ms,
+        sdnn_ms=sdnn_ms,
+        mean_hr_bpm=mean_hr_bpm,
+        eda_mean_us=0.0,
+        eda_phasic_index=0.0,
+        stress_score=0.0,
+        rr_source=rr_source,
+        vlf_ms2=freq.get("vlf_ms2"),
+        lf_ms2=freq.get("lf_ms2"),
+        hf_ms2=freq.get("hf_ms2"),
+        lf_hf_ratio=freq.get("lf_hf_ratio"),
+        nn50=time_domain.get("nn50"),
+        pnn50=time_domain.get("pnn50"),
+        sd1_ms=poincare.get("sd1_ms"),
+        sd2_ms=poincare.get("sd2_ms"),
+        sd1_sd2_ratio=poincare.get("sd1_sd2_ratio"),
+        ellipse_area_ms2=poincare.get("ellipse_area_ms2"),
+        total_power_ms2=freq.get("total_power_ms2"),
+        lf_nu=freq.get("lf_nu"),
+        hf_nu=freq.get("hf_nu"),
+        vlf_pct=freq.get("vlf_pct"),
+        lf_pct=freq.get("lf_pct"),
+        hf_pct=freq.get("hf_pct"),
+        stress_score_v2=None,
+        stress_v2_contributions=None,
+    )
+    result = AnalysisResponse(
+        synchronized_samples=0,
+        drift_slope=1.0,
+        drift_intercept_ms=0.0,
+        drift_segments=0,
+        xcorr_offset_ms=0.0,
+        feature_summary=feature_summary,
+        quality_flags=quality_flags,
+        movement_artifact_ratio=0.0,
+        report_markdown=build_markdown_report(feature_summary, quality_flags),
+        non_diagnostic_notice=NON_DIAGNOSTIC_NOTICE,
+        sync_qc_score=0.0,
+        sync_qc_band="unknown",
+        sync_qc_gate="single_file",
+        sync_qc_failure_reasons=["Synchronization not run in Polar-only mode."],
+    )
+    extended = {
+        "analysis_mode": "polar_only",
+        "psd": {
+            "frequencies_hz": compute_full_psd(df).get("frequencies_hz", []),
+            "psd_ms2_hz": compute_full_psd(df).get("psd_ms2_hz", []),
+            "rr_source": rr_series_source,
+            "bands": compute_full_psd(df).get("bands", {}),
+        },
+        "rr_series_ms": rr_arr.tolist() if hasattr(rr_arr, "tolist") else list(rr_arr),
+        "cleaned_timeseries": _subsample_timeseries(df, max_points=1000),
+        "descriptive_stats": {
+            "hr_bpm": _series_stats(df.get("hr_bpm", pd.Series(dtype=float))),
+            "eda_us": _empty_stats(),
+        },
+        "windowed": None,
+        "spectral_trajectory": None,
+        "stress_decomposition": None,
+        "inference": None,
+        "motion_artifact_ratio": 0.0,
+    }
+    return result, extended
+
+
+def _build_emotibit_only_result(df: pd.DataFrame) -> tuple[AnalysisResponse, dict[str, Any]]:
+    eda_mean_us, eda_phasic_index = compute_eda_features(df)
+    feature_summary = FeatureSummary(
+        rmssd_ms=0.0,
+        sdnn_ms=0.0,
+        mean_hr_bpm=0.0,
+        eda_mean_us=eda_mean_us,
+        eda_phasic_index=eda_phasic_index,
+        stress_score=0.0,
+        rr_source="none",
+    )
+    quality_flags = [
+        "EmotiBit-only analysis: EDA and motion inspection are available; HRV, stress, and synchronization charts require a Polar file.",
+    ]
+    result = AnalysisResponse(
+        synchronized_samples=0,
+        drift_slope=1.0,
+        drift_intercept_ms=0.0,
+        drift_segments=0,
+        xcorr_offset_ms=0.0,
+        feature_summary=feature_summary,
+        quality_flags=quality_flags,
+        movement_artifact_ratio=0.0,
+        report_markdown=build_markdown_report(feature_summary, quality_flags),
+        non_diagnostic_notice=NON_DIAGNOSTIC_NOTICE,
+        sync_qc_score=0.0,
+        sync_qc_band="unknown",
+        sync_qc_gate="single_file",
+        sync_qc_failure_reasons=["Synchronization not run in EmotiBit-only mode."],
+    )
+    extended = {
+        "analysis_mode": "emotibit_only",
+        "cleaned_timeseries": _subsample_timeseries(df, max_points=1000),
+        "rr_series_ms": [],
+        "psd": {"frequencies_hz": [], "psd_ms2_hz": [], "rr_source": "none", "bands": {}},
+        "descriptive_stats": {
+            "hr_bpm": _empty_stats(),
+            "eda_us": _series_stats(df.get("eda_us", pd.Series(dtype=float))),
+        },
+        "windowed": None,
+        "spectral_trajectory": None,
+        "stress_decomposition": None,
+        "inference": None,
+        "motion_artifact_ratio": 0.0,
+    }
+    return result, extended
+
+
+def _series_stats(series: pd.Series) -> dict[str, float]:
+    vals = pd.to_numeric(series, errors="coerce").dropna()
+    if len(vals) == 0:
+        return _empty_stats()
+    return {
+        "mean": float(vals.mean()),
+        "std": float(vals.std(ddof=1)) if len(vals) > 1 else 0.0,
+        "min": float(vals.min()),
+        "max": float(vals.max()),
+        "p05": float(vals.quantile(0.05)),
+        "p95": float(vals.quantile(0.95)),
+    }
+
+
+def _empty_stats() -> dict[str, float]:
+    return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "p05": 0.0, "p95": 0.0}
 
 
 def _subsample_timeseries(df: pd.DataFrame, max_points: int = 1000) -> list[dict]:
