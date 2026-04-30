@@ -47,6 +47,7 @@ from app.services.processing.features import (
 )
 from app.services.processing.kubios_benchmark import compare_with_kubios
 from app.services.processing.pipeline import InsufficientDataError, run_analysis
+from app.services.processing.stress import rescale_stress_v2_to_arousal_index
 from app.services.processing.statistics import compute_inference_summary, compute_summary_stats
 from app.services.processing.sync import synchronize_signals
 from app.services.reporting.report_builder import build_markdown_report
@@ -202,27 +203,42 @@ async def analyze(
             rsa_amplitude=session_rsa,
         )
         wf = compute_windowed_features(cleaned, window_s=60.0, step_s=30.0)
+        arousal_baseline = _baseline_window_stress_v2(markers_summary, cleaned, wf.window_centers_s, wf.stress_v2)
+        wf.arousal_index = [
+            rescale_stress_v2_to_arousal_index(score, arousal_baseline)
+            for score in wf.stress_v2
+        ]
         st = compute_spectral_trajectory(cleaned, window_s=120.0, step_s=60.0)
         psd = compute_full_psd(cleaned)
         rr_arr, rr_source = _get_rr_intervals(cleaned)
         summ = compute_summary_stats(cleaned)
         inf = compute_inference_summary(cleaned) if len(cleaned) >= 10 else None
 
-        # Build stress decomposition components list
-        stress_components = [
-            {"name": "HR", "component": decomp.hr_component, "contribution": decomp.hr_contribution, "weight": 0.25 if has_rsa else 0.30},
-            {"name": "EDA_tonic", "component": decomp.eda_component, "contribution": decomp.eda_contribution, "weight": 0.25 if has_rsa else 0.30},
-            {"name": "EDA_phasic", "component": decomp.phasic_component, "contribution": decomp.phasic_contribution, "weight": 0.15 if has_rsa else 0.20},
-            {"name": "HRV_deficit", "component": 1.0 - decomp.hrv_protection, "contribution": decomp.hrv_contribution, "weight": 0.15 if has_rsa else 0.20},
-        ]
-        if has_rsa:
-            stress_components.append(
-                {"name": "RSA_deficit", "component": 1.0 - decomp.rsa_component, "contribution": decomp.rsa_contribution, "weight": 0.20}
-            )
+        # Prefer the richer v2 decomposition when the session summary
+        # includes it; fall back to the older v1 decomposition only for
+        # legacy payloads.
+        stress_components = _stress_v2_components(fs.stress_v2_contributions)
+        stress_total = fs.stress_score_v2 if fs.stress_score_v2 is not None else decomp.total_score
+        stress_driver = (
+            max(stress_components, key=lambda c: c["contribution"])["name"]
+            if stress_components
+            else decomp.dominant_driver
+        )
+        if not stress_components:
+            stress_components = [
+                {"name": "HR", "component": decomp.hr_component, "contribution": decomp.hr_contribution, "weight": 0.25 if has_rsa else 0.30},
+                {"name": "EDA_tonic", "component": decomp.eda_component, "contribution": decomp.eda_contribution, "weight": 0.25 if has_rsa else 0.30},
+                {"name": "EDA_phasic", "component": decomp.phasic_component, "contribution": decomp.phasic_contribution, "weight": 0.15 if has_rsa else 0.20},
+                {"name": "HRV_deficit", "component": 1.0 - decomp.hrv_protection, "contribution": decomp.hrv_contribution, "weight": 0.15 if has_rsa else 0.20},
+            ]
+            if has_rsa:
+                stress_components.append(
+                    {"name": "RSA_deficit", "component": 1.0 - decomp.rsa_component, "contribution": decomp.rsa_contribution, "weight": 0.20}
+                )
         extended = {
             "stress_decomposition": {
-                "total": decomp.total_score,
-                "dominant_driver": decomp.dominant_driver,
+                "total": stress_total,
+                "dominant_driver": stress_driver,
                 "components": stress_components,
             },
             "windowed": {
@@ -232,12 +248,22 @@ async def analyze(
                 "eda_mean": wf.eda_mean,
                 "rmssd": wf.rmssd,
                 "stress": wf.stress,
+                "stress_v2": wf.stress_v2,
+                "arousal_index": wf.arousal_index,
+                "arousal_baseline": arousal_baseline,
                 "hr_contribution": wf.hr_contribution,
                 "eda_contribution": wf.eda_contribution,
                 "hrv_contribution": wf.hrv_contribution,
                 "mean_rpm": wf.mean_rpm,
                 "rsa_amplitude": wf.rsa_amplitude,
                 "rsa_contribution": wf.rsa_contribution,
+                "v2_hr_contribution": wf.v2_hr_contribution,
+                "v2_eda_contribution": wf.v2_eda_contribution,
+                "v2_phasic_contribution": wf.v2_phasic_contribution,
+                "v2_vagal_contribution": wf.v2_vagal_contribution,
+                "v2_sympathovagal_contribution": wf.v2_sympathovagal_contribution,
+                "v2_rigidity_contribution": wf.v2_rigidity_contribution,
+                "v2_rsa_contribution": wf.v2_rsa_contribution,
             },
             "spectral_trajectory": {
                 "t_s": st.window_centers_s,
@@ -291,6 +317,73 @@ async def analyze(
     _persist_store()
 
     return result
+
+
+def _baseline_window_stress_v2(
+    markers_summary: Optional[dict[str, Any]],
+    cleaned: pd.DataFrame,
+    centers_s: list[float],
+    stress_v2: list[float],
+) -> float | None:
+    """Find the participant's neutral baseline from the baseline interval."""
+    if len(centers_s) != len(stress_v2) or len(stress_v2) == 0:
+        return None
+    origin = None
+    if "timestamp_ms" in cleaned.columns and len(cleaned) > 0:
+        origin = float(cleaned["timestamp_ms"].iloc[0])
+
+    if markers_summary and origin is not None:
+        events = markers_summary.get("event_markers") or []
+        onset = next((e for e in events if e.get("event_code") == "baseline_onset"), None)
+        offset = next((e for e in events if e.get("event_code") == "baseline_offset"), None)
+        if onset and offset:
+            try:
+                start_s = (float(onset["utc_ms"]) - origin) / 1000.0
+                end_s = (float(offset["utc_ms"]) - origin) / 1000.0
+                ys = [
+                    score
+                    for t, score in zip(centers_s, stress_v2, strict=False)
+                    if start_s <= t <= end_s and score is not None
+                ]
+                if ys:
+                    return float(sum(ys) / len(ys))
+            except (KeyError, TypeError, ValueError):
+                pass
+
+    fallback = [score for score in stress_v2[:3] if score is not None]
+    if not fallback:
+        return None
+    return float(sum(fallback) / len(fallback))
+
+
+def _stress_v2_components(
+    contributions: dict[str, float | None] | None,
+) -> list[dict[str, float | str]]:
+    if not contributions:
+        return []
+    rows: list[dict[str, float | str]] = []
+    specs = [
+        ("hr", "HR"),
+        ("eda", "EDA tonic"),
+        ("phasic", "EDA phasic"),
+        ("vagal", "Vagal deficit"),
+        ("sympathovagal", "LF_nu balance"),
+        ("rigidity", "SD1/SD2 rigidity"),
+        ("rsa", "RSA deficit"),
+    ]
+    for key, label in specs:
+        contribution = contributions.get(key)
+        if contribution is None:
+            continue
+        rows.append(
+            {
+                "name": label,
+                "component": float(contributions.get(f"{key}_value") or 0.0),
+                "contribution": float(contribution),
+                "weight": float(contributions.get(f"{key}_weight") or 0.0),
+            }
+        )
+    return rows
 
 
 @router.post("/analyze/single", response_model=AnalysisResponse)

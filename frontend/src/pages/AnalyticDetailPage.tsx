@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getSession, StoredSession } from "../api";
+import { getSession, StoredSession, WindowedFeatures } from "../api";
 import {
+  AnalyticEntry,
+  ChartKind,
   GROUP_META,
   adjacentAnalytics,
   analyticsByGroup,
   getAnalytic,
 } from "../analytics/catalog";
 import { ChartRenderer } from "../analytics/ChartRenderer";
+import { EventInterval, sessionEventIntervals } from "../analytics/eventIntervals";
 import { annotateGlossaryTerms } from "../analytics/util";
 
 /**
@@ -22,6 +25,7 @@ export const AnalyticDetailPage: React.FC = () => {
   const { sessionId, analyticId } = useParams<{ sessionId: string; analyticId: string }>();
   const [session, setSession] = useState<StoredSession | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [largeChart, setLargeChart] = useState(false);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -54,7 +58,7 @@ export const AnalyticDetailPage: React.FC = () => {
   const groupAnalytics = analyticsByGroup(a.group);
   const displayHeading = a.question ?? a.title;
   const chartLabel = a.question ? a.title : undefined;
-  const scienceCaption = captionForAnalytic(a.id, session);
+  const scienceCaption = captionsForAnalytic(a, session);
   const downloadSvg = () => {
     const svg = document.querySelector("#chart-frame svg");
     if (!svg) return;
@@ -121,21 +125,31 @@ export const AnalyticDetailPage: React.FC = () => {
 
       {scienceCaption && (
         <section className="science-caption" aria-label="Caption">
-          <h2>Caption</h2>
-          <p>{scienceCaption}</p>
+          <h2>Caption for document or slide</h2>
+          <p>{scienceCaption.short}</p>
+          <h2 className="student-caption-heading">Student explanation</h2>
+          <p>{scienceCaption.long}</p>
           {a.question && <p className="chart-context-note">{a.caption}</p>}
         </section>
       )}
 
       {/* Chart */}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
+        <button className="download-btn" type="button" aria-pressed={largeChart} onClick={() => setLargeChart((value) => !value)}>
+          {largeChart ? "Standard chart view" : "Large chart view"}
+        </button>
         <button className="download-btn" type="button" onClick={downloadSvg}>
           Download chart SVG
         </button>
       </div>
-      <div id="chart-frame" className="chart-frame">
-        <ChartRenderer kind={a.chartKind} session={session} width={920} height={360} />
+      <div className={largeChart ? "chart-with-event-key large" : "chart-with-event-key"}>
+        <div id="chart-frame" className={largeChart ? "chart-frame large" : "chart-frame"}>
+          <ChartRenderer kind={a.chartKind} session={session} width={largeChart ? 1180 : 920} height={largeChart ? 620 : 430} />
+        </div>
+        <EventIntervalLegend session={session} />
       </div>
+      <EventMarkerApplicabilityNote analytic={a} session={session} />
+      <EventIntervalTable session={session} />
 
       {/* Interpretation triplet. Glossary terms in each prose block
           surface as dotted-underline hover tooltips on first occurrence;
@@ -144,13 +158,13 @@ export const AnalyticDetailPage: React.FC = () => {
           page. */}
       <section aria-label="Interpretation" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18, marginBottom: 22 }}>
         <InterpretationBlock title="What this chart shows" hue={meta.hue}>
-          {annotateGlossaryTerms(a.whatItShows)}
+          {annotateGlossaryTerms(whatItShowsForAnalytic(a, session))}
         </InterpretationBlock>
         <InterpretationBlock title="How to read it" hue={meta.hue}>
-          {annotateGlossaryTerms(a.howToRead)}
+          {annotateGlossaryTerms(howToReadForAnalytic(a, session))}
         </InterpretationBlock>
         <InterpretationBlock title="What it means for cognitive neuroscience of architecture" hue={meta.hue}>
-          {annotateGlossaryTerms(a.architecturalMeaning)}
+          {annotateGlossaryTerms(architecturalMeaningForAnalytic(a, session))}
         </InterpretationBlock>
         {a.caveats && (
           <InterpretationBlock title="Caveat" hue="#E8872A">
@@ -259,7 +273,214 @@ function chainLabel(hue: string): React.CSSProperties {
 
 const chainTitle: React.CSSProperties = { fontSize: 13, color: "#E8E8E8", fontWeight: 500, lineHeight: 1.4 };
 
-function captionForAnalytic(id: string, session: StoredSession): string {
+const TIME_ALIGNED_CHARTS: ChartKind[] = [
+  "timeseries_overlay",
+  "line",
+  "strip",
+  "edr_respiration",
+  "stress_timeline",
+];
+
+function EventMarkerApplicabilityNote({ analytic, session }: { analytic: AnalyticEntry; session: StoredSession }) {
+  const intervals = sessionEventIntervals(session);
+  if (intervals.length === 0 || TIME_ALIGNED_CHARTS.includes(analytic.chartKind)) return null;
+  const reason = markerReason(analytic.chartKind);
+  return (
+    <div className="event-marker-note">
+      Room-entry and room-exit markers are not drawn inside this plot because {reason}. Use the room key and interval-means table below for room-by-room interpretation.
+    </div>
+  );
+}
+
+function markerReason(kind: ChartKind): string {
+  switch (kind) {
+    case "spectrum":
+      return "the x-axis is frequency, not time";
+    case "tachogram":
+      return "the x-axis is beat index, not elapsed time";
+    case "histogram":
+      return "the x-axis is interval value, not elapsed time";
+    case "poincare":
+      return "the axes are successive RR intervals, not elapsed time";
+    case "summary_table":
+      return "this analytic is a numeric summary table rather than a time plot";
+    case "stacked_bar":
+    case "radar":
+    case "gauge":
+    case "forest":
+    case "bland_altman":
+    default:
+      return "the chart summarizes values rather than plotting a time axis";
+  }
+}
+
+function EventIntervalLegend({ session }: { session: StoredSession }) {
+  const intervals = sessionEventIntervals(session);
+  if (intervals.length === 0) return null;
+  return (
+    <aside className="event-legend" aria-label="Room letter legend">
+      <h2>Room key</h2>
+      <p>Letters match the vertical event lines.</p>
+      <ol>
+        {intervals.map((interval) => (
+          <li key={interval.key}>
+            <span>{interval.letter}</span>
+            <b>{interval.label}</b>
+            <em>{formatRelativeRange(session, interval)}</em>
+          </li>
+        ))}
+      </ol>
+    </aside>
+  );
+}
+
+function EventIntervalTable({ session }: { session: StoredSession }) {
+  const intervals = sessionEventIntervals(session);
+  const ts = session.extended?.cleaned_timeseries ?? [];
+  if (intervals.length === 0 || ts.length === 0) return null;
+  const rows = allIntervalStats(session);
+  return (
+    <section className="interval-summary" aria-label="Interval summary table">
+      <h2>Interval means</h2>
+      <div className="interval-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Interval</th>
+              <th>Seconds</th>
+              <th>Arousal</th>
+              <th>Main driver</th>
+              <th>HR mean</th>
+              <th>HR SD</th>
+              <th>EDA mean</th>
+              <th>Stress v2</th>
+              <th>Resp. rate</th>
+              <th>RMSSD</th>
+              <th>RSA amp.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.interval.key}>
+                <td><span className="interval-letter">{row.interval.letter}</span></td>
+                <td>{row.interval.label}</td>
+                <td className="num">{formatRelativeRange(session, row.interval)}</td>
+                <td className="num">{fmtSigned(row.arousal?.mean, 3)}</td>
+                <td>{row.dominantDriver?.label ?? "-"}</td>
+                <td className="num">{fmt(row.hr?.mean, 1)}</td>
+                <td className="num">{fmt(row.hr?.sd, 1)}</td>
+                <td className="num">{fmt(row.eda?.mean, 2)}</td>
+                <td className="num">{fmt(row.stressV2?.mean, 3)}</td>
+                <td className="num">{fmt(row.rpm?.mean, 1)}</td>
+                <td className="num">{fmt(row.rmssd?.mean, 1)}</td>
+                <td className="num">{fmt(row.rsa?.mean, 1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function intervalStats(session: StoredSession, interval: EventInterval) {
+  const ts = session.extended?.cleaned_timeseries ?? [];
+  const windowed = session.extended?.windowed;
+  const points = ts.filter((p) => {
+    const t = p.timestamp_ms;
+    return typeof t === "number" && t >= interval.onsetMs && t <= interval.offsetMs;
+  });
+  const x0 = sessionTimeOriginMs(session);
+  const onsetS = x0 == null ? interval.onsetMs / 1000 : (interval.onsetMs - x0) / 1000;
+  const offsetS = x0 == null ? interval.offsetMs / 1000 : (interval.offsetMs - x0) / 1000;
+  const windowIndexes = windowed?.t_s
+    .map((t, i) => (t >= onsetS && t <= offsetS ? i : -1))
+    .filter((i) => i >= 0) ?? [];
+  const dominantDriver = dominantWindowContribution(windowed, windowIndexes);
+
+  return {
+    interval,
+    hr: numberStats(points.map((p) => p.hr_bpm)),
+    eda: numberStats(points.map((p) => p.eda_us)),
+    stress: numberStats(windowIndexes.map((i) => windowed?.stress[i])),
+    stressV2: numberStats(windowIndexes.map((i) => windowed?.stress_v2?.[i])),
+    arousal: numberStats(windowIndexes.map((i) => windowed?.arousal_index?.[i])),
+    rpm: numberStats(windowIndexes.map((i) => windowed?.mean_rpm[i])),
+    rmssd: numberStats(windowIndexes.map((i) => windowed?.rmssd[i])),
+    rsa: numberStats(windowIndexes.map((i) => windowed?.rsa_amplitude[i])),
+    dominantDriver,
+  };
+}
+
+function allIntervalStats(session: StoredSession) {
+  return sessionEventIntervals(session).map((interval) => intervalStats(session, interval));
+}
+
+function numberStats(values: Array<number | null | undefined>) {
+  const ys = values.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  if (ys.length === 0) return null;
+  const mean = ys.reduce((sum, v) => sum + v, 0) / ys.length;
+  const variance = ys.length > 1
+    ? ys.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / (ys.length - 1)
+    : 0;
+  return {
+    n: ys.length,
+    mean,
+    sd: Math.sqrt(variance),
+    min: Math.min(...ys),
+    max: Math.max(...ys),
+  };
+}
+
+function formatRelativeRange(session: StoredSession, interval: EventInterval): string {
+  const origin = sessionTimeOriginMs(session);
+  const start = origin == null ? interval.onsetMs / 1000 : (interval.onsetMs - origin) / 1000;
+  const end = origin == null ? interval.offsetMs / 1000 : (interval.offsetMs - origin) / 1000;
+  return `${start.toFixed(0)}-${end.toFixed(0)}s`;
+}
+
+function sessionTimeOriginMs(session: StoredSession): number | null {
+  const first = session.extended?.cleaned_timeseries?.find((p) => typeof p.timestamp_ms === "number");
+  return typeof first?.timestamp_ms === "number" ? first.timestamp_ms : null;
+}
+
+function fmt(value: number | null | undefined, digits: number): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+}
+
+function fmtSigned(value: number | null | undefined, digits: number): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`
+    : "-";
+}
+
+function captionsForAnalytic(a: AnalyticEntry, session: StoredSession): { short: string; long: string } {
+  const finding = findingForAnalytic(a.id, session);
+  const intervalDigest = intervalArousalDigest(a, session);
+  const readerMove = firstSentence(a.howToRead);
+  const meaning = firstSentence(a.architecturalMeaning);
+  const caveat = a.caveats ? firstSentence(a.caveats) : "";
+  return {
+    short: [
+      finding,
+      intervalDigest.short,
+      readerMove,
+      meaning,
+      caveat || "Treat this as evidence about this session, not as a clinical diagnosis.",
+    ].filter(Boolean).join(" "),
+    long: [
+      finding,
+      intervalDigest.long,
+      `This is what the chart is showing: ${a.whatItShows}`,
+      `To read the figure, ${lowerFirst(a.howToRead)}`,
+      `The reason it matters for architecture-cognition work is this: ${a.architecturalMeaning}`,
+      a.caveats ? `The main caution is that ${lowerFirst(a.caveats)}` : "The main caution is that this is a session-level physiological interpretation, so it should be read with the quality flags and study design rather than as a standalone diagnosis.",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function findingForAnalytic(id: string, session: StoredSession): string {
   const r = session.result;
   const fs = r.feature_summary;
   const ext = session.extended;
@@ -293,12 +514,14 @@ function captionForAnalytic(id: string, session: StoredSession): string {
       const d = ext?.stress_decomposition;
       if (!d) return "Finding: no stress decomposition can be computed for this session because one or more required channels are missing.";
       const strongest = [...d.components].sort((a, b) => b.contribution - a.contribution)[0];
-      return `Finding: the experimental stress composite is ${d.total.toFixed(3)}, led by ${d.dominant_driver}; the largest plotted contribution is ${strongest.name} at ${strongest.contribution.toFixed(3)}. Read the stacked bar by asking which colour occupies most of the total, because that identifies the physiological channel driving the score.`;
+      const intervalSentence = stressIntervalFinding(session);
+      return `Finding: the experimental stress composite is ${d.total.toFixed(3)}, led by ${d.dominant_driver}; the largest plotted contribution is ${strongest.name} at ${strongest.contribution.toFixed(3)}. ${intervalSentence} Read the stacked bar by asking which colour occupies most of the total, because that identifies the physiological channel driving the score.`;
     }
     case "ns-06-stress-timeline": {
-      const s = seriesStats(ext?.windowed?.stress ?? []);
+      const s = seriesStats(ext?.windowed?.stress_v2 ?? ext?.windowed?.stress ?? []);
       if (!s) return "Finding: the recording does not contain enough windows for a stress trajectory.";
-      return `Finding: windowed stress peaks at ${s.max.toFixed(3)}, averages ${s.mean.toFixed(3)}, and ${s.direction} by ${Math.abs(s.delta).toFixed(3)} across the session. Read the white line for total stress and the coloured stacked areas for which physiological channel is responsible at each moment.`;
+      const intervalSentence = stressIntervalFinding(session);
+      return `Finding: windowed stress peaks at ${s.max.toFixed(3)}, averages ${s.mean.toFixed(3)}, and ${s.direction} by ${Math.abs(s.delta).toFixed(3)} across the session. ${intervalSentence} Read the white line for total stress and the coloured stacked areas for which physiological channel is responsible at each moment.`;
     }
     case "dg-01-sync-qc":
       return `Finding: synchronization quality is ${r.sync_qc_band.toUpperCase()} at ${r.sync_qc_score.toFixed(0)}/100, with gate "${r.sync_qc_gate}". Read the bar as the trust gate for all time-aligned claims; ${r.sync_qc_failure_reasons.length ? `the main warning is ${r.sync_qc_failure_reasons[0]}` : "there are no reported sync-QC failure reasons"}.`;
@@ -372,7 +595,7 @@ function captionForAnalytic(id: string, session: StoredSession): string {
     case "q-s-09-stress-v1-vs-v2":
       return stressV2 == null
         ? `Finding: only stress v1 is available here, with v1=${fs.stress_score.toFixed(3)}. Read the score as a first-pass composite, not as a validated diagnosis.`
-        : `Finding: stress v1=${fs.stress_score.toFixed(3)} and stress v2=${stressV2.toFixed(3)}, a difference of ${(stressV2 - fs.stress_score).toFixed(3)}. Read the gap as the effect of adding richer HRV/RSA channels; if the bars diverge, the added physiology has changed the story.`;
+        : `Finding: stress v1=${fs.stress_score.toFixed(3)} and stress v2=${stressV2.toFixed(3)}, a difference of ${(stressV2 - fs.stress_score).toFixed(3)}. ${stressIntervalFinding(session)} Read the gap as the effect of adding richer HRV/RSA channels; if the bars diverge, the added physiology has changed the story.`;
     default:
       return "Finding: this chart provides the direct evidence for the stated question. Read the plotted pattern first, then check quality flags before making a substantive interpretation.";
   }
@@ -468,4 +691,107 @@ function correlation(aRaw: Array<number | null | undefined>, bRaw: Array<number 
   }
   const den = Math.sqrt(denA * denB);
   return den > 0 ? num / den : null;
+}
+
+function dominantWindowContribution(
+  windowed: WindowedFeatures | null | undefined,
+  windowIndexes: number[],
+) {
+  if (!windowed || windowIndexes.length === 0) return null;
+  const channels = [
+    { key: "v2_hr_contribution", label: "HR" },
+    { key: "v2_eda_contribution", label: "EDA tonic" },
+    { key: "v2_phasic_contribution", label: "EDA phasic" },
+    { key: "v2_vagal_contribution", label: "vagal deficit" },
+    { key: "v2_sympathovagal_contribution", label: "LF_nu balance" },
+    { key: "v2_rigidity_contribution", label: "SD1/SD2 rigidity" },
+    { key: "v2_rsa_contribution", label: "RSA deficit" },
+  ] as const;
+  const scores: Array<{ key: string; label: string; mean: number }> = [];
+  for (const channel of channels) {
+    const values = windowIndexes
+      .map((i) => (windowed as any)?.[channel.key]?.[i] as number | null | undefined)
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    if (values.length === 0) continue;
+    scores.push({
+      key: channel.key,
+      label: channel.label,
+      mean: values.reduce((sum, v) => sum + v, 0) / values.length,
+    });
+  }
+  scores.sort((a, b) => b.mean - a.mean);
+  return scores[0] ?? null;
+}
+
+function intervalArousalDigest(a: AnalyticEntry, session: StoredSession): { short: string; long: string } {
+  if (!showsIntervalArousal(a)) return { short: "", long: "" };
+  const rows = allIntervalStats(session);
+  const baseline = rows.find((row) => row.interval.key.toLowerCase() === "baseline");
+  const nonBaseline = rows.filter(
+    (row) =>
+      row.interval.key.toLowerCase() !== "baseline" &&
+      typeof row.arousal?.mean === "number" &&
+      Number.isFinite(row.arousal.mean),
+  );
+  if (nonBaseline.length === 0) return { short: "", long: "" };
+  const peak = [...nonBaseline].sort((a, b) => (b.arousal?.mean ?? -Infinity) - (a.arousal?.mean ?? -Infinity))[0];
+  const low = [...nonBaseline].sort((a, b) => (a.arousal?.mean ?? Infinity) - (b.arousal?.mean ?? Infinity))[0];
+  const baselineText = baseline?.stressV2?.mean != null
+    ? `The baseline interval sits at raw stress v2 ${baseline.stressV2.mean.toFixed(3)}, which is treated as arousal 0.000.`
+    : "The baseline interval is treated as the neutral arousal point whenever a baseline marker is available.";
+  const short = `Relative to baseline, ${peak.interval.label} is highest at ${fmtSigned(peak.arousal?.mean, 3)}, driven mainly by ${peak.dominantDriver?.label ?? "no single channel"}, while ${low.interval.label} is lowest at ${fmtSigned(low.arousal?.mean, 3)}.`;
+  const long = `${baselineText} Positive arousal means the seven-channel stress-v2 composite is above that participant's own resting level; negative arousal means it is below. Across room intervals, ${peak.interval.label} is the strongest activation interval at ${fmtSigned(peak.arousal?.mean, 3)} with ${peak.dominantDriver?.label ?? "no single dominant driver"} contributing most, whereas ${low.interval.label} is the calmest interval at ${fmtSigned(low.arousal?.mean, 3)}.`;
+  return { short, long };
+}
+
+function stressIntervalFinding(session: StoredSession): string {
+  const rows = allIntervalStats(session).filter(
+    (row) =>
+      row.interval.key.toLowerCase() !== "baseline" &&
+      typeof row.arousal?.mean === "number" &&
+      Number.isFinite(row.arousal.mean),
+  );
+  if (rows.length === 0) return "";
+  const peak = [...rows].sort((a, b) => (b.arousal?.mean ?? -Infinity) - (a.arousal?.mean ?? -Infinity))[0];
+  return `${peak.interval.label} is the highest-arousal interval at ${fmtSigned(peak.arousal?.mean, 3)}, driven chiefly by ${peak.dominantDriver?.label ?? "no single dominant channel"}.`;
+}
+
+function showsIntervalArousal(a: AnalyticEntry): boolean {
+  return a.chartKind === "stress_timeline"
+    || a.chartKind === "timeseries_overlay"
+    || a.id.startsWith("ns-0")
+    || a.id === "q-s-09-stress-v1-v2";
+}
+
+function whatItShowsForAnalytic(a: AnalyticEntry, session: StoredSession): string {
+  if (!showsIntervalArousal(a)) return a.whatItShows;
+  const rows = allIntervalStats(session).filter((row) => row.interval.key.toLowerCase() !== "baseline");
+  if (rows.length === 0) return a.whatItShows;
+  return `${a.whatItShows} For this session the room-interval table is the compact scientific summary: each row reports the room's mean raw stress-v2, its baseline-centred arousal index, and the dominant physiological contributor to that arousal.`;
+}
+
+function howToReadForAnalytic(a: AnalyticEntry, session: StoredSession): string {
+  if (!showsIntervalArousal(a)) return a.howToRead;
+  const rows = allIntervalStats(session).filter((row) => row.interval.key.toLowerCase() !== "baseline");
+  if (rows.length === 0) return a.howToRead;
+  return `${a.howToRead} Then read the room table in two passes: first compare the arousal column against zero, which is the participant's own baseline; then read the main-driver column to see whether the rise comes chiefly from heart rate, electrodermal activity, vagal deficit, LF_nu balance, rigidity, or RSA deficit.`;
+}
+
+function architecturalMeaningForAnalytic(a: AnalyticEntry, session: StoredSession): string {
+  if (!showsIntervalArousal(a)) return a.architecturalMeaning;
+  const rows = allIntervalStats(session).filter((row) => row.interval.key.toLowerCase() !== "baseline");
+  if (rows.length === 0) return a.architecturalMeaning;
+  return `${a.architecturalMeaning} That distinction matters in architectural interpretation because two rooms may produce similar total arousal while doing so through different autonomic routes: one may raise cardiac load, another may suppress vagal flexibility, and a third may increase electrodermal orienting.`;
+}
+
+function firstSentence(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^(.+?[.!?])(\s|$)/);
+  return match ? match[1] : trimmed;
+}
+
+function lowerFirst(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
 }

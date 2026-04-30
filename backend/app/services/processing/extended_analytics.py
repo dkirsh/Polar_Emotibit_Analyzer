@@ -41,8 +41,14 @@ import numpy as np
 import pandas as pd
 from scipy.signal import welch as scipy_welch
 
-from app.services.processing.features import _get_rr_intervals, compute_edr
-from app.services.processing.stress import compute_stress_score
+from app.services.processing.features import (
+    _get_rr_intervals,
+    compute_edr,
+    compute_hrv_frequency_features,
+    compute_poincare_features,
+    compute_time_domain_features,
+)
+from app.services.processing.stress import compute_stress_score_v2
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +147,8 @@ class WindowedFeatures:
     eda_mean: list[float] = field(default_factory=list)
     rmssd: list[float] = field(default_factory=list)
     stress: list[float] = field(default_factory=list)
+    stress_v2: list[float] = field(default_factory=list)
+    arousal_index: list[float | None] = field(default_factory=list)
     # Stress decomposition per window
     hr_contribution: list[float] = field(default_factory=list)
     eda_contribution: list[float] = field(default_factory=list)
@@ -149,6 +157,14 @@ class WindowedFeatures:
     mean_rpm: list[float | None] = field(default_factory=list)
     rsa_amplitude: list[float | None] = field(default_factory=list)
     rsa_contribution: list[float] = field(default_factory=list)
+    # v2 stress decomposition per window
+    v2_hr_contribution: list[float] = field(default_factory=list)
+    v2_eda_contribution: list[float] = field(default_factory=list)
+    v2_phasic_contribution: list[float] = field(default_factory=list)
+    v2_vagal_contribution: list[float] = field(default_factory=list)
+    v2_sympathovagal_contribution: list[float | None] = field(default_factory=list)
+    v2_rigidity_contribution: list[float | None] = field(default_factory=list)
+    v2_rsa_contribution: list[float | None] = field(default_factory=list)
 
 
 def compute_windowed_features(
@@ -227,6 +243,37 @@ def compute_windowed_features(
         result.mean_rpm.append(edr["mean_rpm"])
         result.rsa_amplitude.append(rsa_amp)
         result.rsa_contribution.append(decomp.rsa_contribution)
+
+        # Richer v2 windowed stress uses the same seven-channel logic
+        # as the session summary, but applied locally to each interval.
+        td = compute_time_domain_features(chunk)
+        poincare = compute_poincare_features(chunk)
+        freq = compute_hrv_frequency_features(chunk)
+        stress_v2, stress_v2_contrib = compute_stress_score_v2(
+            rmssd_ms=rmssd_val,
+            mean_hr_bpm=mean_hr,
+            eda_mean_us=mean_eda,
+            eda_phasic_index=phasic,
+            pnn50=td.get("pnn50"),  # type: ignore[arg-type]
+            sd1_sd2_ratio=poincare.get("sd1_sd2_ratio"),
+            lf_nu=freq.get("lf_nu"),
+            rsa_amplitude=rsa_amp,
+        )
+        result.stress_v2.append(stress_v2)
+        result.arousal_index.append(None)
+        result.v2_hr_contribution.append(float(stress_v2_contrib.get("hr") or 0.0))
+        result.v2_eda_contribution.append(float(stress_v2_contrib.get("eda") or 0.0))
+        result.v2_phasic_contribution.append(float(stress_v2_contrib.get("phasic") or 0.0))
+        result.v2_vagal_contribution.append(float(stress_v2_contrib.get("vagal") or 0.0))
+        result.v2_sympathovagal_contribution.append(
+            float(stress_v2_contrib["sympathovagal"]) if stress_v2_contrib.get("sympathovagal") is not None else None
+        )
+        result.v2_rigidity_contribution.append(
+            float(stress_v2_contrib["rigidity"]) if stress_v2_contrib.get("rigidity") is not None else None
+        )
+        result.v2_rsa_contribution.append(
+            float(stress_v2_contrib["rsa"]) if stress_v2_contrib.get("rsa") is not None else None
+        )
 
         center += step_ms
 

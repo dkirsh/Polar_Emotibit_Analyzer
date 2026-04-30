@@ -111,12 +111,22 @@ export type WindowedFeatures = {
   eda_mean: number[];
   rmssd: number[];
   stress: number[];
+  stress_v2?: number[];
+  arousal_index?: Array<number | null>;
+  arousal_baseline?: number | null;
   hr_contribution: number[];
   eda_contribution: number[];
   hrv_contribution: number[];
   mean_rpm: Array<number | null>;
   rsa_amplitude: Array<number | null>;
   rsa_contribution: number[];
+  v2_hr_contribution?: number[];
+  v2_eda_contribution?: number[];
+  v2_phasic_contribution?: number[];
+  v2_vagal_contribution?: number[];
+  v2_sympathovagal_contribution?: Array<number | null>;
+  v2_rigidity_contribution?: Array<number | null>;
+  v2_rsa_contribution?: Array<number | null>;
 };
 
 export type SpectralTrajectory = {

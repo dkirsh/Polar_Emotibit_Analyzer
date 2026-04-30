@@ -32,6 +32,7 @@ export type ChartKind =
   | "poincare"
   | "edr_respiration"
   | "stress_timeline"
+  | "interval_profile"
   | "gauge";
 
 export type AnalyticEntry = {
@@ -618,14 +619,53 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
     whatItShows:
       "A two-row table at the top showing v1 score and v2 score side-by-side, followed by a seven-row contribution table: HR, EDA (tonic), EDA (phasic), vagal composite (RMSSD + pNN50 averaged), sympathovagal (LF_nu when available), rigidity (1 − SD1/SD2), respiratory (RSA when available). Channels that were inactive for this session appear as '(inactive)' rather than as 0.",
     howToRead:
-      "A large divergence between v1 and v2 means the new HRV inputs are saying something the RMSSD-only v1 could not. A small divergence means the extra channels did not change the verdict. Read the contribution table to see which channel moved the score and by how much; the _active_channels line tells you how many of the seven channels had enough data to participate.",
+      "A large divergence between v1 and v2 means the new RR-derived and respiratory inputs are saying something the RMSSD-only v1 could not. A small divergence means the extra channels did not change the verdict. Read the contribution table to see which channel moved the score and by how much; the _active_channels line tells you how many of the seven channels had enough data to participate.",
     architecturalMeaning:
-      "If a study relies on the stress score to rank architectural environments, the v1-vs-v2 panel is the place to look when v1 and v2 rank the environments differently. Usually the v2 ranking is the one to trust because it draws on more independent physiological signals, but the v2 composite is still experimental and should not be used alone.",
+      "If a study relies on the stress score to rank architectural environments, the v1-vs-v2 panel is the place to look when v1 and v2 rank the environments differently. Usually the v2 ranking is the one to trust because it draws on more independent physiological signals: RR-pattern features (RMSSD plus pNN50, LF_nu, SD1/SD2) and respiratory RSA as well as HR and EDA. That also means a room-entry breathing change can move the score, which is why the respiration page should be read beside this one.",
     caveats:
       "Both v1 and v2 are labelled experimental and not psychometrically validated against standard stress instruments (PSS, DASS-21) or physiological ground truth (cortisol). Use the score for within-session relative comparison only. Validation is a 90-day task flagged in the stress.py module docstring.",
     references: [
       { apa: "Shaffer, F., & Ginsberg, J. P. (2017). An overview of heart rate variability metrics and norms. Frontiers in Public Health, 5, 258.", doi: "10.3389/fpubh.2017.00258" },
       { apa: "Thayer, J. F., et al. (2012). A meta-analysis of heart rate variability and neuroimaging studies. Neuroscience & Biobehavioral Reviews, 36(2), 747–756.", doi: "10.1016/j.neubiorev.2011.11.009" },
+    ],
+  },
+  {
+    id: "q-s-10-stress-v2-interval-arousal",
+    group: "question",
+    question: "Which room intervals are above or below baseline arousal, and by how much?",
+    category: "science",
+    order: 10,
+    title: "Stress v2 interval arousal profile",
+    caption:
+      "Stress v2 rescaled around the participant's own resting baseline, plotted room by room so the magnitude and driver of each interval's arousal shift are explicit.",
+    chartKind: "interval_profile",
+    dataPaths: [
+      "extended.windowed.stress_v2",
+      "extended.windowed.arousal_index",
+      "extended.windowed.v2_hr_contribution",
+      "extended.windowed.v2_eda_contribution",
+      "extended.windowed.v2_phasic_contribution",
+      "extended.windowed.v2_vagal_contribution",
+      "extended.windowed.v2_sympathovagal_contribution",
+      "extended.windowed.v2_rigidity_contribution",
+      "extended.windowed.v2_rsa_contribution",
+      "markers_summary.event_markers",
+    ],
+    minimumPreconditions: [
+      "Markers file with baseline_onset/baseline_offset and room onset/offset intervals",
+      "Windowed stress-v2 data in the extended analysis bundle",
+    ],
+    whatItShows:
+      "A bar chart of mean arousal by interval, where arousal is the seven-channel stress-v2 composite re-expressed relative to the participant's own baseline. Zero means baseline-level activation; positive bars mean more arousal than baseline; negative bars mean less. Each bar is annotated with its dominant driver so the viewer can see whether a room's difference is chiefly cardiac, electrodermal, vagal, sympathovagal, rigidity-based, or respiratory.",
+    howToRead:
+      "Read the zero line first. It is not a population norm; it is this participant's baseline interval. Then compare bar height across rooms. A difference of +0.20 means the room's mean stress-v2 level is one tenth of the raw 0-to-1 scale above baseline after the doubling rescale. Finally read the dominant-driver tag; it tells you which physiological subsystem is making that room differ from baseline.",
+    architecturalMeaning:
+      "This is the clearest chart for an architecture study that wants to ask, room by room, where the participant was most activated and why. It turns a continuous session trace into an interpretable spatial comparison. Because it is built from RR-pattern features and RSA as well as HR and EDA, it also forces the analyst to check whether a room's apparent stress effect is really a breathing shift or a change in vagal flexibility rather than a simple cardiac rise.",
+    caveats:
+      "The arousal index is baseline-centred and session-relative, not a validated circumplex norm. It should be interpreted alongside the respiration and RR-pattern pages, especially if room transitions alter breathing behaviour.",
+    references: [
+      { apa: "Shaffer, F., & Ginsberg, J. P. (2017). An overview of heart rate variability metrics and norms. Frontiers in Public Health, 5, 258.", doi: "10.3389/fpubh.2017.00258" },
+      { apa: "Schmidt, P., et al. (2018). Introducing WESAD, a multimodal dataset for wearable stress and affect detection. Proc. ICMI, 400–408.", doi: "10.1145/3242969.3242985" },
     ],
   },
 ];

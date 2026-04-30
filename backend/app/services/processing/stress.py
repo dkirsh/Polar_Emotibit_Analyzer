@@ -249,7 +249,34 @@ def compute_stress_score_v2(
             contributions[k] = round(effective_weights[k] * channel_values[k], 4)
         else:
             contributions[k] = None
+        contributions[f"{k}_weight"] = round(effective_weights[k], 4) if active[k] else None
+        contributions[f"{k}_value"] = round(channel_values[k], 4) if active[k] else None
     contributions["_active_channels"] = float(n_active)
     contributions["_vagal_protection"] = round(vagal_protection, 4)
 
     return score, contributions
+
+
+def rescale_stress_v2_to_arousal_index(
+    score_01: float | None,
+    baseline_01: float | None,
+) -> float | None:
+    """Re-express the v2 stress composite as baseline-neutral arousal.
+
+    The raw composite lives on [0, 1]. For the room-by-room analyses we
+    treat the participant's own resting baseline as the neutral point and
+    rescale deviations around it onto [-1, +1]:
+
+        arousal = 2 * (score - baseline)
+
+    A value of 0 therefore means "at baseline", positive values mean
+    greater activation/arousal than baseline, and negative values mean
+    lower activation than baseline. Values are clipped to [-1, +1].
+    """
+    if score_01 is None or baseline_01 is None:
+        return None
+    try:
+        arousal = 2.0 * (float(score_01) - float(baseline_01))
+    except (TypeError, ValueError):
+        return None
+    return max(-1.0, min(1.0, arousal))
