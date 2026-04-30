@@ -60,9 +60,21 @@ export const AnalyticDetailPage: React.FC = () => {
   const chartLabel = a.question ? a.title : undefined;
   const scienceCaption = captionsForAnalytic(a, session);
   const downloadSvg = () => {
-    const svg = document.querySelector("#chart-frame svg");
+    const svg = document.querySelector<SVGSVGElement>("#chart-frame svg");
     if (!svg) return;
-    const source = new XMLSerializer().serializeToString(svg);
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    try {
+      const bbox = svg.getBBox();
+      const pad = 18;
+      clone.setAttribute("viewBox", `${bbox.x - pad} ${bbox.y - pad} ${bbox.width + pad * 2} ${bbox.height + pad * 2}`);
+      clone.setAttribute("width", `${Math.ceil(bbox.width + pad * 2)}`);
+      clone.setAttribute("height", `${Math.ceil(bbox.height + pad * 2)}`);
+      clone.setAttribute("overflow", "visible");
+      clone.removeAttribute("style");
+    } catch {
+      // If getBBox fails, fall back to the rendered SVG geometry.
+    }
+    const source = new XMLSerializer().serializeToString(clone);
     const blob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -758,6 +770,7 @@ function stressIntervalFinding(session: StoredSession): string {
 
 function showsIntervalArousal(a: AnalyticEntry): boolean {
   return a.chartKind === "stress_timeline"
+    || a.chartKind === "interval_profile"
     || a.chartKind === "timeseries_overlay"
     || a.id.startsWith("ns-0")
     || a.id === "q-s-09-stress-v1-v2";

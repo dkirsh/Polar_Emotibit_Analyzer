@@ -360,6 +360,7 @@ a:hover { text-decoration: underline; }
   width: 100%;
   max-width: 100%;
   height: auto;
+  overflow: visible;
 }
 
 .chart-with-event-key {

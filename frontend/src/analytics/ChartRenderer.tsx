@@ -12,7 +12,7 @@ import React from "react";
 import { ChartKind } from "./catalog";
 import { StoredSession } from "../api";
 import { PALETTE } from "./chartPalette";
-import { eventLetter, sessionEvents } from "./eventIntervals";
+import { eventLetter, sessionEventIntervals, sessionEvents } from "./eventIntervals";
 import { safe } from "./util";
 
 type Props = {
@@ -60,6 +60,8 @@ export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, hei
       return <EDRRespiration session={session} width={width} height={height} />;
     case "stress_timeline":
       return <StressTimeline session={session} width={width} height={height} />;
+    case "interval_profile":
+      return <IntervalArousalProfile session={session} width={width} height={height} />;
     case "bland_altman":
     default:
       return <Placeholder kind={kind} session={session} />;
@@ -898,6 +900,66 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
   );
 }
 
+function IntervalArousalProfile({ session, width, height }: { session: StoredSession; width: number; height: number }) {
+  const rows = intervalArousalRows(session);
+  if (rows.length === 0) return <Empty msg="No room intervals available for arousal profile" />;
+  const padL = 70;
+  const padR = 30;
+  const padT = 44;
+  const padB = 86;
+  const W = width - padL - padR;
+  const H = height - padT - padB;
+  const minVal = Math.min(-0.25, ...rows.map((row) => row.arousal));
+  const maxVal = Math.max(0.25, ...rows.map((row) => row.arousal));
+  const maxAbs = Math.max(Math.abs(minVal), Math.abs(maxVal), 0.25);
+  const yMin = -maxAbs;
+  const yMax = maxAbs;
+  const zeroY = padT + ((yMax - 0) / (yMax - yMin || 1)) * H;
+  const barGap = 14;
+  const barW = Math.max(22, (W - barGap * (rows.length - 1)) / rows.length);
+  const toY = (v: number) => padT + ((yMax - v) / (yMax - yMin || 1)) * H;
+  return (
+    <svg width={width} height={height} role="img" aria-label="Stress v2 interval arousal profile">
+      <rect width={width} height={height} fill={PALETTE.bg} />
+      <text x={padL} y={22} fill={PALETTE.text} fontSize="12" fontWeight="600">Stress v2 interval arousal profile</text>
+      <text x={padL + 220} y={22} fill={PALETTE.sub} fontSize="10">0 = participant baseline, positive = above baseline, negative = below baseline</text>
+      <line x1={padL} y1={zeroY} x2={padL + W} y2={zeroY} stroke={PALETTE.text} strokeWidth={1.4} />
+      <line x1={padL} y1={padT} x2={padL} y2={padT + H} stroke={PALETTE.grid} />
+      {[yMax, yMax / 2, 0, yMin / 2, yMin].map((tick) => (
+        <g key={tick}>
+          <line x1={padL} y1={toY(tick)} x2={padL + W} y2={toY(tick)} stroke={PALETTE.grid} strokeDasharray="3,3" opacity={0.55} />
+          <text x={8} y={toY(tick) + 4} fill={PALETTE.sub} fontSize="10">{tick >= 0 ? "+" : ""}{tick.toFixed(2)}</text>
+        </g>
+      ))}
+      {rows.map((row, i) => {
+        const x = padL + i * (barW + barGap);
+        const y = toY(row.arousal);
+        const top = Math.min(y, zeroY);
+        const barH = Math.max(2, Math.abs(zeroY - y));
+        const positive = row.arousal >= 0;
+        const color = positive ? PALETTE.bad : PALETTE.good;
+        return (
+          <g key={row.key}>
+            <rect x={x} y={top} width={barW} height={barH} rx={4} fill={color} opacity={0.9} />
+            <text x={x + barW / 2} y={positive ? top - 8 : top + barH + 14} textAnchor="middle" fill={PALETTE.text} fontSize="10" fontWeight="700">
+              {row.arousal >= 0 ? "+" : ""}{row.arousal.toFixed(3)}
+            </text>
+            <text x={x + barW / 2} y={height - 48} textAnchor="middle" fill={PALETTE.text} fontSize="11" fontWeight="700">
+              {row.label}
+            </text>
+            <text x={x + barW / 2} y={height - 34} textAnchor="middle" fill={PALETTE.sub} fontSize="10">
+              {row.driver}
+            </text>
+            <text x={x + barW / 2} y={height - 20} textAnchor="middle" fill={PALETTE.sub} fontSize="10">
+              v2 {row.stressV2.toFixed(3)}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 function EventLinesMs({
   session, t0, t1, toX, y1, y2, width,
 }: {
@@ -981,6 +1043,63 @@ function EventLetter({
 function sessionTimeOriginMs(session: StoredSession): number | null {
   const first = session.extended?.cleaned_timeseries?.find((p) => typeof p.timestamp_ms === "number");
   return typeof first?.timestamp_ms === "number" ? first.timestamp_ms : null;
+}
+
+function intervalArousalRows(session: StoredSession): Array<{
+  key: string;
+  label: string;
+  arousal: number;
+  stressV2: number;
+  driver: string;
+}> {
+  const intervals = sessionEventIntervals(session);
+  const windowed = session.extended?.windowed;
+  if (!windowed || intervals.length === 0) return [];
+  const origin = sessionTimeOriginMs(session);
+  if (origin == null) return [];
+  return intervals
+    .map((interval) => {
+      const onsetS = (interval.onsetMs - origin) / 1000;
+      const offsetS = (interval.offsetMs - origin) / 1000;
+      const idx = windowed.t_s
+        .map((t, i) => (t >= onsetS && t <= offsetS ? i : -1))
+        .filter((i) => i >= 0);
+      if (idx.length === 0) return null;
+      const arousal = meanOf(idx.map((i) => windowed.arousal_index?.[i]));
+      const stressV2 = meanOf(idx.map((i) => windowed.stress_v2?.[i]));
+      if (arousal == null || stressV2 == null) return null;
+      return {
+        key: interval.key,
+        label: interval.label,
+        arousal,
+        stressV2,
+        driver: dominantDriverLabel(windowed, idx),
+      };
+    })
+    .filter((row): row is { key: string; label: string; arousal: number; stressV2: number; driver: string } => row !== null);
+}
+
+function dominantDriverLabel(sessionWindowed: NonNullable<StoredSession["extended"]>["windowed"], idx: number[]): string {
+  const specs = [
+    { label: "HR", values: sessionWindowed?.v2_hr_contribution },
+    { label: "EDA tonic", values: sessionWindowed?.v2_eda_contribution },
+    { label: "EDA phasic", values: sessionWindowed?.v2_phasic_contribution },
+    { label: "vagal deficit", values: sessionWindowed?.v2_vagal_contribution },
+    { label: "LF_nu", values: sessionWindowed?.v2_sympathovagal_contribution },
+    { label: "rigidity", values: sessionWindowed?.v2_rigidity_contribution },
+    { label: "RSA", values: sessionWindowed?.v2_rsa_contribution },
+  ];
+  const rows = specs
+    .map((spec) => ({ label: spec.label, mean: meanOf(idx.map((i) => spec.values?.[i])) }))
+    .filter((row): row is { label: string; mean: number } => row.mean != null)
+    .sort((a, b) => b.mean - a.mean);
+  return rows[0]?.label ?? "mixed";
+}
+
+function meanOf(values: Array<number | null | undefined>): number | null {
+  const ys = values.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  if (ys.length === 0) return null;
+  return ys.reduce((sum, v) => sum + v, 0) / ys.length;
 }
 
 function eventSecond(utcMs: number, originMs: number | null, xMin: number, xMax: number): number {

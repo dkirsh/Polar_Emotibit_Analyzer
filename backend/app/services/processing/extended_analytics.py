@@ -172,6 +172,7 @@ def compute_windowed_features(
     *,
     window_s: float = 60.0,
     step_s: float = 30.0,
+    spectral_window_s: float = 120.0,
 ) -> WindowedFeatures:
     """Compute physiological features in sliding windows.
 
@@ -248,7 +249,12 @@ def compute_windowed_features(
         # as the session summary, but applied locally to each interval.
         td = compute_time_domain_features(chunk)
         poincare = compute_poincare_features(chunk)
-        freq = compute_hrv_frequency_features(chunk)
+        spec_window_ms = spectral_window_s * 1000
+        spec_lo = center - spec_window_ms / 2
+        spec_hi = center + spec_window_ms / 2
+        spec_mask = (ts >= spec_lo) & (ts < spec_hi)
+        spec_chunk = df.loc[spec_mask] if spectral_window_s > window_s else chunk
+        freq = compute_hrv_frequency_features(spec_chunk)
         stress_v2, stress_v2_contrib = compute_stress_score_v2(
             rmssd_ms=rmssd_val,
             mean_hr_bpm=mean_hr,
