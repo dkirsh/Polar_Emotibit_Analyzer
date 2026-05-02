@@ -4,6 +4,7 @@ import pytest
 
 from app.services.processing.features import (
     compute_edr,
+    compute_edr_detailed_from_rr_ms,
     compute_temperature_features,
     compute_rolling_features
 )
@@ -54,6 +55,32 @@ def test_compute_temperature_features_slope():
     assert result["temp_slope"] is not None
     assert result["temp_slope"] < 0 # Negative slope
     assert result["mean_temp_c"] == 33.55
+
+
+def test_compute_edr_detailed_from_rr_ms_returns_proxy_signal():
+    """Stored RR intervals should be enough to rebuild the EDR proxy."""
+    n_beats = 240
+    rr_signal_ms = []
+    current_time_s = 0.0
+    for _ in range(n_beats):
+        rr = 820 + 60 * np.sin(2 * np.pi * 0.22 * current_time_s)
+        rr_signal_ms.append(rr)
+        current_time_s += rr / 1000.0
+
+    result = compute_edr_detailed_from_rr_ms(rr_signal_ms)
+
+    assert result["source"] == "rr_edr_proxy"
+    assert len(result["time_s"]) == len(result["signal"])
+    assert len(result["time_s"]) > 100
+    assert len(result["peak_times_s"]) > 5
+    assert len(result["trough_times_s"]) > 5
+    assert len(result["inspiratory_times_s"]) > 5
+    assert len(result["expiratory_times_s"]) > 5
+    assert result["mean_rpm"] is not None
+    assert 12.0 <= result["mean_rpm"] <= 16.0
+    assert result["quality"]["usable_breath_count"] > 5
+    assert result["quality"]["signal_confidence"] is not None
+    assert result["quality"]["verdict"] in {"strong", "usable", "weak", "insufficient"}
 
 def test_compute_rolling_features():
     """

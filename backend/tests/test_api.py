@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.api.v1.routes import analysis as analysis_routes
 from app.services.ingestion.synthetic import generate_synthetic_session
 
 
@@ -177,6 +178,17 @@ def test_analyze_on_synthetic_pair_returns_feature_summary():
     assert body["synchronized_samples"] > 0
     assert isinstance(body["quality_flags"], list)
     assert body["non_diagnostic_notice"]  # required per AI safety notice
+    assert body["feature_summary"]["rr_source"] == "derived_from_bpm"
+    assert "BPM" in body["feature_summary"]["rr_source_note"]
+
+    detail = client.get("/api/v1/sessions/TEST_ANALYZE_01").json()
+    edr_proxy = detail["extended"]["edr_proxy"]
+    assert edr_proxy["source"] == "rr_edr_proxy"
+    assert edr_proxy["rr_source"] == "derived_from_bpm"
+    assert "BPM" in edr_proxy["rr_source_note"]
+    assert len(edr_proxy["time_s"]) == len(edr_proxy["signal"])
+    assert edr_proxy["quality"]["source_confidence"] == 0.4
+    assert edr_proxy["quality"]["overall_confidence"] is not None
 
 
 def test_analyze_accepts_raw_ecg_polar_csv():
@@ -197,7 +209,28 @@ def test_analyze_accepts_raw_ecg_polar_csv():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["feature_summary"]["rr_source"] == "derived_from_ecg"
+    assert "computed in-app" in body["feature_summary"]["rr_source_note"]
     assert body["feature_summary"]["rmssd_ms"] >= 0
+
+    detail = client.get("/api/v1/sessions/TEST_ANALYZE_RAW_ECG").json()
+    assert detail["extended"]["edr_proxy"]["rr_source"] == "derived_from_ecg"
+    assert "Raw Polar ECG" in detail["extended"]["edr_proxy"]["rr_source_note"]
+
+
+def test_edr_proxy_backfill_uses_existing_rr_source():
+    record = {
+        "result": {"feature_summary": {"rr_source": "derived_from_bpm"}},
+        "extended": {
+            "rr_series_ms": [800.0 + (i % 5) * 5.0 for i in range(80)],
+            "psd": {"rr_source": "derived_from_ecg"},
+        },
+    }
+    changed = analysis_routes._maybe_backfill_edr_proxy(record)
+    assert changed is True
+    assert record["extended"]["edr_proxy"]["rr_source"] == "derived_from_ecg"
+    assert "raw polar ecg" in record["extended"]["edr_proxy"]["rr_source_note"].lower()
+    assert record["result"]["feature_summary"]["rr_source_note"]
+    assert record["extended"]["edr_proxy"]["quality"]["overall_confidence"] is not None
 
 
 def test_analyze_single_polar_saves_chart_bundle():

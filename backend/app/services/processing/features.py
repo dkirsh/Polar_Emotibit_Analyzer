@@ -101,6 +101,34 @@ def _rr_from_hr(hr_bpm: pd.Series) -> np.ndarray:
     return (60000.0 / valid).astype(float) if len(valid) > 0 else np.array([])
 
 
+def rr_source_note_for(source: str | None) -> str:
+    """Human-readable provenance note for the RR source."""
+    match source:
+        case "native_polar":
+            return "Native Polar RR intervals present — strongest available HRV and respiration provenance in this repo."
+        case "derived_from_ecg":
+            return "RR intervals were reconstructed in-app from raw Polar ECG — still beat-level, but weaker than a native RR export."
+        case "derived_from_bpm":
+            return "Only HR / BPM samples were present, so RR was reconstructed from BPM — adequate for coarse timing, weak for fine HRV or breath-shape claims."
+        case "none":
+            return "No RR provenance is available for this session."
+        case _:
+            return "RR provenance is not explicitly documented for this session."
+
+
+def rr_source_confidence_for(source: str | None) -> float:
+    """Coarse 0-1 confidence tier for the RR source itself."""
+    match source:
+        case "native_polar":
+            return 1.0
+        case "derived_from_ecg":
+            return 0.8
+        case "derived_from_bpm":
+            return 0.4
+        case _:
+            return 0.2
+
+
 def _filter_ectopic(rr: np.ndarray, threshold: float = 0.30) -> np.ndarray:
     """Legacy local-median ectopic filter.
 
@@ -475,55 +503,199 @@ def compute_eda_features(df: pd.DataFrame) -> tuple[float, float]:
 # Extended Physiological Features (Respiration, Rolling Windows, Temperature)
 # ---------------------------------------------------------------------------
 
-def compute_edr(df: pd.DataFrame, resample_hz: float = 4.0) -> dict[str, float | None]:
-    """ECG-Derived Respiration (EDR) from R-R intervals using Respiratory Sinus Arrhythmia (RSA).
-    
-    Extracts continuous breathing rate (RPM) by applying a bandpass filter 
-    to the interpolated HR timeseries. Normal breathing is typically 0.15 - 0.4 Hz.
-    
-    Returns:
-        dict containing 'mean_rpm', 'rpm_std' (RRV), and 'rsa_amplitude'
-    """
-    rr, _ = _get_rr_intervals(df)
-    empty = {"mean_rpm": None, "rpm_std": None, "rsa_amplitude": None}
-    
+def _compute_edr_detailed_from_rr(
+    rr: np.ndarray,
+    *,
+    resample_hz: float = 4.0,
+) -> dict[str, object]:
+    """Build an RR-derived respiration proxy from an RR series alone."""
+    empty: dict[str, object] = {
+        "mean_rpm": None,
+        "rpm_std": None,
+        "rsa_amplitude": None,
+        "time_s": [],
+        "signal": [],
+        "peak_times_s": [],
+        "trough_times_s": [],
+        "breath_intervals_s": [],
+        "inspiratory_times_s": [],
+        "expiratory_times_s": [],
+        "quality": {
+            "duration_s": None,
+            "peak_count": 0,
+            "trough_count": 0,
+            "usable_breath_count": 0,
+            "paired_cycle_fraction": None,
+            "interval_cv": None,
+            "plausible_rate_fraction": None,
+            "signal_confidence": None,
+            "source_confidence": None,
+            "overall_confidence": None,
+            "verdict": "insufficient",
+        },
+        "source": "rr_edr_proxy",
+    }
+
     if len(rr) < 30:  # Need at least a few breaths
         return empty
-        
+
     try:
+        rr = np.asarray(rr, dtype=float)
+        if rr.ndim != 1 or np.any(~np.isfinite(rr)):
+            return empty
+
         # Create continuous time array
         t_ms = np.cumsum(rr)
         t_s = (t_ms - t_ms[0]) / 1000.0
-        
+
         # Resample RR intervals (ms) nicely at assigned Hz
         t_uniform = np.arange(t_s[0], t_s[-1], 1.0 / resample_hz)
         rr_uniform = np.interp(t_uniform, t_s, rr)
-        
+
         # Bandpass filter for respiration band (0.15 to 0.4 Hz -> 9 to 24 breaths/min)
         nyq = 0.5 * resample_hz
         b, a = butter(4, [0.15 / nyq, 0.4 / nyq], btype='band')
         edr_signal = filtfilt(b, a, rr_uniform)
-        
-        # Find peaks in the respiratory signal to count individual breaths
-        peaks, _ = find_peaks(edr_signal, distance=int(resample_hz * (60.0 / 30.0))) # Max 30 breaths/min
-        
+
+        # Find peaks and troughs to estimate coarse breath timing.
+        min_distance = int(resample_hz * (60.0 / 30.0))  # Max 30 breaths/min
+        peaks, _ = find_peaks(edr_signal, distance=min_distance)
+        troughs, _ = find_peaks(-edr_signal, distance=min_distance)
+
+        duration_s = float(t_uniform[-1] - t_uniform[0]) if len(t_uniform) >= 2 else 0.0
+
         if len(peaks) < 2:
-            return empty
-            
+            return {
+                **empty,
+                "time_s": t_uniform.tolist(),
+                "signal": edr_signal.tolist(),
+                "quality": {
+                    **(empty["quality"] if isinstance(empty["quality"], dict) else {}),
+                    "duration_s": round(duration_s, 2),
+                    "peak_count": int(len(peaks)),
+                    "trough_count": int(len(troughs)),
+                },
+            }
+
         # Calculate instantaneous breathing rates
         breath_intervals = np.diff(peaks) / resample_hz # in seconds
         inst_rpm = 60.0 / breath_intervals
-        
+
         # Calculate RSA amplitude (shallow vs deep breathing flag)
         amplitude = float(np.mean(np.abs(edr_signal[peaks])))
-        
+
+        peak_times = t_uniform[peaks]
+        trough_times = t_uniform[troughs]
+        inspiratory_times: list[float] = []
+        expiratory_times: list[float] = []
+        if len(trough_times) >= 2 and len(peak_times) >= 1:
+            for peak_t in peak_times:
+                prev_trough = trough_times[trough_times < peak_t]
+                next_trough = trough_times[trough_times > peak_t]
+                if len(prev_trough) == 0 or len(next_trough) == 0:
+                    continue
+                insp = float(peak_t - prev_trough[-1])
+                exp = float(next_trough[0] - peak_t)
+                if insp > 0:
+                    inspiratory_times.append(insp)
+                if exp > 0:
+                    expiratory_times.append(exp)
+
+        interval_cv = (
+            float(np.std(breath_intervals, ddof=1) / np.mean(breath_intervals))
+            if len(breath_intervals) >= 2 and float(np.mean(breath_intervals)) > 0
+            else None
+        )
+        plausible_rate_fraction = (
+            float(np.mean((inst_rpm >= 6.0) & (inst_rpm <= 30.0)))
+            if len(inst_rpm) > 0
+            else None
+        )
+        paired_cycle_fraction = (
+            float(min(len(inspiratory_times), len(expiratory_times)) / len(peak_times))
+            if len(peak_times) > 0
+            else None
+        )
+        duration_score = min(duration_s / 120.0, 1.0) if duration_s > 0 else 0.0
+        breath_count_score = min(len(breath_intervals) / 12.0, 1.0)
+        stability_score = (
+            float(np.clip(1.0 - interval_cv, 0.0, 1.0))
+            if interval_cv is not None
+            else 0.0
+        )
+        pairing_score = float(np.clip(paired_cycle_fraction or 0.0, 0.0, 1.0))
+        plausibility_score = float(np.clip(plausible_rate_fraction or 0.0, 0.0, 1.0))
+        signal_confidence = float(
+            np.mean([duration_score, breath_count_score, stability_score, pairing_score, plausibility_score])
+        )
+        if signal_confidence >= 0.8:
+            verdict = "strong"
+        elif signal_confidence >= 0.6:
+            verdict = "usable"
+        elif signal_confidence >= 0.4:
+            verdict = "weak"
+        else:
+            verdict = "insufficient"
+
         return {
             "mean_rpm": round(float(np.mean(inst_rpm)), 2),
             "rpm_std": round(float(np.std(inst_rpm, ddof=1)), 2), # Respiration Rate Variability
-            "rsa_amplitude": round(amplitude, 2) # Drops during acute stress/cognitive load
+            "rsa_amplitude": round(amplitude, 2), # Drops during acute stress/cognitive load
+            "time_s": t_uniform.tolist(),
+            "signal": edr_signal.tolist(),
+            "peak_times_s": peak_times.tolist(),
+            "trough_times_s": trough_times.tolist(),
+            "breath_intervals_s": breath_intervals.tolist(),
+            "inspiratory_times_s": inspiratory_times,
+            "expiratory_times_s": expiratory_times,
+            "quality": {
+                "duration_s": round(duration_s, 2),
+                "peak_count": int(len(peak_times)),
+                "trough_count": int(len(trough_times)),
+                "usable_breath_count": int(len(breath_intervals)),
+                "paired_cycle_fraction": round(paired_cycle_fraction, 3) if paired_cycle_fraction is not None else None,
+                "interval_cv": round(interval_cv, 3) if interval_cv is not None else None,
+                "plausible_rate_fraction": round(plausibility_score, 3) if plausible_rate_fraction is not None else None,
+                "signal_confidence": round(signal_confidence, 3),
+                "source_confidence": None,
+                "overall_confidence": None,
+                "verdict": verdict,
+            },
+            "source": "rr_edr_proxy",
         }
     except Exception:
         return empty
+
+
+def compute_edr_detailed(df: pd.DataFrame, resample_hz: float = 4.0) -> dict[str, object]:
+    """ECG-derived respiration proxy with summary and breath-timing detail.
+
+    This is still an indirect respiratory estimate from RR modulation, not a
+    literal airflow or chest-belt trace. It is suitable for rate, RSA, and
+    coarse breath-cycle timing diagnostics, but not for strong claims about
+    detailed breath morphology.
+    """
+    rr, _ = _get_rr_intervals(df)
+    return _compute_edr_detailed_from_rr(rr, resample_hz=resample_hz)
+
+
+def compute_edr_detailed_from_rr_ms(
+    rr_intervals_ms: list[float] | np.ndarray,
+    resample_hz: float = 4.0,
+) -> dict[str, object]:
+    """Reconstruct the respiration proxy from stored RR intervals."""
+    rr = np.asarray(rr_intervals_ms, dtype=float)
+    return _compute_edr_detailed_from_rr(rr, resample_hz=resample_hz)
+
+
+def compute_edr(df: pd.DataFrame, resample_hz: float = 4.0) -> dict[str, float | None]:
+    """Summary EDR features preserved for existing callers."""
+    detailed = compute_edr_detailed(df, resample_hz=resample_hz)
+    return {
+        "mean_rpm": detailed.get("mean_rpm"),  # type: ignore[return-value]
+        "rpm_std": detailed.get("rpm_std"),  # type: ignore[return-value]
+        "rsa_amplitude": detailed.get("rsa_amplitude"),  # type: ignore[return-value]
+    }
 
 
 def compute_temperature_features(df: pd.DataFrame) -> dict[str, float | None]:

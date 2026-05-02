@@ -58,6 +58,8 @@ export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, hei
       return <ForestPlot session={session} width={width} height={height} />;
     case "edr_respiration":
       return <EDRRespiration session={session} width={width} height={height} />;
+    case "edr_quality":
+      return <EDRQualityAudit session={session} width={width} height={height} />;
     case "stress_timeline":
       return <StressTimeline session={session} width={width} height={height} />;
     case "interval_profile":
@@ -703,29 +705,120 @@ function Empty({ msg }: { msg: string }) {
   return <div style={{ background: PALETTE.bg, padding: 28, color: PALETTE.sub, textAlign: "center" }}>{msg}</div>;
 }
 
+function EDRQualityAudit({ session, width, height }: { session: StoredSession; width: number; height: number }) {
+  const edr = session.extended?.edr_proxy;
+  const q = edr?.quality;
+  if (!edr || !q) return <Empty msg="No respiration-proxy quality bundle is available for this session" />;
+
+  const overall = q.overall_confidence ?? q.signal_confidence ?? 0;
+  const rows = [
+    { label: "Signal confidence", value: q.signal_confidence ?? 0, note: "Duration, usable cycles, rhythm stability, and plausible rate." },
+    { label: "Source confidence", value: q.source_confidence ?? 0, note: "How strong the underlying RR provenance is." },
+    { label: "Cycle pairing", value: q.paired_cycle_fraction ?? 0, note: "How many peaks can be paired into rough inhale-exhale cycles." },
+    { label: "Rhythm stability", value: q.interval_cv != null ? Math.max(0, 1 - q.interval_cv) : 0, note: "Breath-interval regularity, treated cautiously." },
+  ];
+  const pad = 34;
+  const top = 82;
+  const rowGap = 52;
+  const barW = width - 320;
+  const verdictColor = overall >= 0.8 ? PALETTE.good : overall >= 0.6 ? PALETTE.resp : overall >= 0.4 ? PALETTE.warn : PALETTE.bad;
+  const note = edr.rr_source_note ?? session.result.feature_summary.rr_source_note ?? "RR provenance note unavailable.";
+  const summary = [
+    `Duration ${fmtMaybe(q.duration_s, 1)} s`,
+    `${q.peak_count} peaks`,
+    `${q.trough_count} troughs`,
+    `${q.usable_breath_count} usable intervals`,
+    edr.mean_rpm != null ? `mean ${edr.mean_rpm.toFixed(1)} RPM` : "mean RPM unavailable",
+  ].join(" · ");
+
+  return (
+    <svg width={width} height={height} role="img" aria-label="Respiration proxy quality audit">
+      <rect width={width} height={height} fill={PALETTE.bg} />
+      <text x={pad} y={26} fill={PALETTE.text} fontSize="14" fontWeight="700">Respiration-proxy quality audit</text>
+      <text x={pad} y={48} fill={PALETTE.sub} fontSize="11">{summary}</text>
+      <text x={pad} y={68} fill={PALETTE.sub} fontSize="11">{note}</text>
+      <rect x={width - 170} y={18} width={136} height={42} rx={8} fill={verdictColor} opacity={0.16} stroke={verdictColor} />
+      <text x={width - 158} y={35} fill={verdictColor} fontSize="11" fontWeight="700">Overall confidence</text>
+      <text x={width - 158} y={52} fill={PALETTE.text} fontSize="16" fontWeight="700">
+        {Math.round(overall * 100)}% · {(q.verdict ?? "unknown").toUpperCase()}
+      </text>
+      {rows.map((row, i) => {
+        const y = top + i * rowGap;
+        const pct = Math.max(0, Math.min(1, row.value));
+        return (
+          <g key={row.label}>
+            <text x={pad} y={y} fill={PALETTE.text} fontSize="12" fontWeight="600">{row.label}</text>
+            <text x={pad} y={y + 15} fill={PALETTE.sub} fontSize="10">{row.note}</text>
+            <rect x={220} y={y - 12} width={barW} height={14} rx={7} fill={PALETTE.grid} />
+            <rect x={220} y={y - 12} width={barW * pct} height={14} rx={7} fill={verdictColor} />
+            <text x={220 + barW + 10} y={y} fill={PALETTE.text} fontSize="11">{Math.round(pct * 100)}%</text>
+          </g>
+        );
+      })}
+      <line x1={pad} y1={height - 78} x2={width - pad} y2={height - 78} stroke={PALETTE.grid} />
+      <text x={pad} y={height - 56} fill={PALETTE.text} fontSize="11" fontWeight="700">How to use this page</text>
+      <text x={pad} y={height - 38} fill={PALETTE.sub} fontSize="11">
+        Use strong or usable ratings as permission to reason carefully from respiration rate and RSA.
+      </text>
+      <text x={pad} y={height - 22} fill={PALETTE.sub} fontSize="11">
+        Use weak or insufficient ratings as a warning not to infer fine breath-shape or overstate room-by-room stress from this proxy alone.
+      </text>
+    </svg>
+  );
+}
+
+function fmtMaybe(value: number | null | undefined, digits = 0) {
+  return value == null || !Number.isFinite(value) ? "unavailable" : value.toFixed(digits);
+}
+
 function EDRRespiration({ session, width, height }: { session: StoredSession; width: number; height: number }) {
   const w = session.extended?.windowed;
+  const edrProxy = session.extended?.edr_proxy;
   if (!w || w.t_s.length < 2) return <Empty msg="Not enough windows for respiration trace" />;
 
   const rpm = w.mean_rpm;
   const rsa = w.rsa_amplitude;
   const t = w.t_s;
+  const edrT = edrProxy?.time_s ?? [];
+  const edrY = edrProxy?.signal ?? [];
+  const rrSource = edrProxy?.rr_source ?? session.result.feature_summary.rr_source ?? "none";
+  const edrPeaks = new Set((edrProxy?.peak_times_s ?? []).map((v) => Number(v.toFixed(3))));
+  const edrTroughs = new Set((edrProxy?.trough_times_s ?? []).map((v) => Number(v.toFixed(3))));
 
   // Filter out nulls for scaling
   const validRpm = rpm.filter((v): v is number => v != null);
   const validRsa = rsa.filter((v): v is number => v != null);
-  if (validRpm.length < 2 && validRsa.length < 2) return <Empty msg="EDR could not be computed (recording too short or too few beats)" />;
+  const hasProxy = edrT.length > 2 && edrY.length === edrT.length;
+  if (!hasProxy && validRpm.length < 2 && validRsa.length < 2) return <Empty msg="EDR could not be computed (recording too short or too few beats)" />;
 
   const pad = 40;
   const W = width - pad * 2;
-  const hPanel = (height - pad * 2 - 20) / 2;  // Two equal panels with a gap
-  const tMin = t[0], tMax = t[t.length - 1];
+  const panelGap = 18;
+  const panelCount = hasProxy ? 3 : 2;
+  const proxyNoteGap = hasProxy ? 30 : 0;
+  const hPanel = (height - pad * 2 - panelGap * (panelCount - 1) - proxyNoteGap) / panelCount;
+  const tMin = hasProxy ? edrT[0] : t[0];
+  const tMax = hasProxy ? edrT[edrT.length - 1] : t[t.length - 1];
   const toX = (tv: number) => pad + ((tv - tMin) / (tMax - tMin || 1)) * W;
 
+  // EDR waveform panel (top)
+  const edrTop = pad;
+  const validEdr = hasProxy ? edrY.filter((v): v is number => Number.isFinite(v)) : [];
+  const edrMin = validEdr.length > 0 ? Math.min(...validEdr) : -1;
+  const edrMax = validEdr.length > 0 ? Math.max(...validEdr) : 1;
+  const toYEdR = (v: number) => edrTop + ((edrMax - v) / (edrMax - edrMin || 1)) * hPanel;
+  const edrSegs: string[] = [];
+  if (hasProxy) {
+    edrSegs.push(
+      edrT.map((tv, i) => `${i === 0 ? "M" : "L"}${toX(tv).toFixed(1)},${toYEdR(edrY[i]).toFixed(1)}`).join(" ")
+    );
+  }
+
   // RPM panel (top)
+  const rpmTop = hasProxy ? pad + hPanel + panelGap + proxyNoteGap : pad;
   const rpmMin = validRpm.length > 0 ? Math.min(...validRpm) * 0.9 : 0;
   const rpmMax = validRpm.length > 0 ? Math.max(...validRpm) * 1.1 : 30;
-  const toYRpm = (v: number) => pad + ((rpmMax - v) / (rpmMax - rpmMin || 1)) * hPanel;
+  const toYRpm = (v: number) => rpmTop + ((rpmMax - v) / (rpmMax - rpmMin || 1)) * hPanel;
   const rpmSegs: string[] = [];
   let curSeg = "";
   for (let i = 0; i < t.length; i++) {
@@ -736,7 +829,7 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
   if (curSeg) rpmSegs.push(curSeg);
 
   // RSA panel (bottom)
-  const rsaTop = pad + hPanel + 20;
+  const rsaTop = rpmTop + hPanel + panelGap;
   const rsaMin = validRsa.length > 0 ? Math.min(...validRsa) * 0.9 : 0;
   const rsaMax = validRsa.length > 0 ? Math.max(...validRsa) * 1.1 : 30;
   const toYRsa = (v: number) => rsaTop + ((rsaMax - v) / (rsaMax - rsaMin || 1)) * hPanel;
@@ -752,19 +845,55 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
   // Normal breathing band (12-20 RPM)
   const rpmBandTop = toYRpm(Math.min(20, rpmMax));
   const rpmBandBot = toYRpm(Math.max(12, rpmMin));
+  const rrSourceLabel = rrSource === "native_polar"
+    ? "native Polar RR"
+    : rrSource === "derived_from_ecg"
+      ? "raw-ECG-derived RR"
+      : rrSource === "derived_from_bpm"
+        ? "BPM-derived RR surrogate"
+        : rrSource.replace(/_/g, " ");
 
   return (
-	    <svg width={width} height={height} role="img" aria-label="ECG-derived respiration">
+	    <svg width={width} height={height} role="img" aria-label="RR-derived respiration proxy">
 	      <rect width={width} height={height} fill={PALETTE.bg} />
       <EventLinesSeconds session={session} xMin={tMin} xMax={tMax} toX={toX} y1={pad} y2={height - 24} width={width} />
+        {/* EDR waveform panel */}
+      {hasProxy && (
+        <>
+          <text x={pad} y={edrTop - 8} fill={PALETTE.text} fontSize="12" fontWeight="600">EDR proxy waveform (RR-derived)</text>
+          <text x={pad + 210} y={edrTop - 8} fill={PALETTE.sub} fontSize="10">
+            Source: {rrSourceLabel}
+          </text>
+          {edrSegs.map((path, i) => <path key={`edr-${i}`} d={path} stroke={PALETTE.accent} strokeWidth={1.8} fill="none" />)}
+          {edrT.map((tv, i) => {
+            const key = Number(tv.toFixed(3));
+            if (!edrPeaks.has(key) && !edrTroughs.has(key)) return null;
+            return (
+              <circle
+                key={`edr-mark-${i}`}
+                cx={toX(tv)}
+                cy={toYEdR(edrY[i])}
+                r={edrPeaks.has(key) ? 3.1 : 2.5}
+                fill={edrPeaks.has(key) ? PALETTE.resp : PALETTE.warn}
+                stroke={PALETTE.text}
+                strokeWidth={0.8}
+              />
+            );
+          })}
+          <text x={pad} y={edrTop + hPanel + 16} fill={PALETTE.sub} fontSize="9">
+            Purple dots = inferred inhalation peaks; amber dots = inferred troughs. This is a respiration proxy, not a direct airflow trace.
+          </text>
+          <line x1={pad} y1={edrTop + hPanel} x2={pad + W} y2={edrTop + hPanel} stroke={PALETTE.grid} />
+        </>
+      )}
 	      {/* RPM panel */}
-      <text x={pad} y={pad - 8} fill={PALETTE.resp} fontSize="12" fontWeight="600">Breathing rate (RPM)</text>
+      <text x={pad} y={rpmTop - 8} fill={PALETTE.resp} fontSize="12" fontWeight="600">Breathing rate (RPM)</text>
       <rect x={pad} y={rpmBandTop} width={W} height={Math.max(0, rpmBandBot - rpmBandTop)} fill={PALETTE.resp} opacity={0.08} />
       <text x={pad + W - 100} y={rpmBandTop + 14} fill={PALETTE.sub} fontSize="10">12–20 RPM normal</text>
       {rpmSegs.map((path, i) => <path key={`rpm-${i}`} d={path} stroke={PALETTE.resp} strokeWidth={2} fill="none" />)}
-      <text x={6} y={pad + 6} fill={PALETTE.sub} fontSize="10">{rpmMax.toFixed(0)}</text>
-      <text x={6} y={pad + hPanel} fill={PALETTE.sub} fontSize="10">{rpmMin.toFixed(0)}</text>
-      <line x1={pad} y1={pad + hPanel} x2={pad + W} y2={pad + hPanel} stroke={PALETTE.grid} />
+      <text x={6} y={rpmTop + 6} fill={PALETTE.sub} fontSize="10">{rpmMax.toFixed(0)}</text>
+      <text x={6} y={rpmTop + hPanel} fill={PALETTE.sub} fontSize="10">{rpmMin.toFixed(0)}</text>
+      <line x1={pad} y1={rpmTop + hPanel} x2={pad + W} y2={rpmTop + hPanel} stroke={PALETTE.grid} />
       {/* RSA panel */}
       <text x={pad} y={rsaTop - 8} fill={PALETTE.hr} fontSize="12" fontWeight="600">RSA amplitude (vagal tone proxy)</text>
       {rsaSegs.map((path, i) => <path key={`rsa-${i}`} d={path} stroke={PALETTE.hr} strokeWidth={2} fill="none" />)}

@@ -31,6 +31,7 @@ export type ChartKind =
   | "tachogram"
   | "poincare"
   | "edr_respiration"
+  | "edr_quality"
   | "stress_timeline"
   | "interval_profile"
   | "gauge";
@@ -503,24 +504,44 @@ const QUESTION_DRIVEN: AnalyticEntry[] = [
     ],
   },
   {
+    id: "q-d-05-edr-quality",
+    group: "question",
+    category: "diagnostics",
+    question: "How trustworthy is the RR-derived respiration proxy?",
+    order: 11,
+    title: "Respiration-proxy quality and confidence audit",
+    caption:
+      "A compact audit of respiration-proxy duration, usable cycle count, rhythm stability, source provenance, and overall confidence.",
+    chartKind: "edr_quality",
+    dataPaths: ["extended.edr_proxy", "feature_summary.rr_source", "feature_summary.rr_source_note"],
+    whatItShows:
+      "A diagnostic summary of the RR-derived respiration proxy itself: how long the usable signal is, how many peaks and usable breath intervals were found, how regular the inferred rhythm is, what fraction of cycles could be paired into rough inhale-exhale structure, and how strong the underlying RR provenance is.",
+    howToRead:
+      "Read this page before reading the respiration page scientifically. A high-confidence proxy is long enough, contains enough usable cycles, shows a reasonably stable rhythm, and comes from native RR or raw ECG rather than from BPM reconstruction. A weak or insufficient rating does not mean there was no respiration pattern; it means the repo should not speak confidently about it.",
+    architecturalMeaning:
+      "This page is a guardrail against category mistakes. It distinguishes a session in which respiration can honestly help adjudicate whether a room changed vagal regulation from a session in which the respiration proxy is too weak to bear that interpretive load. In built-environment work, that prevents an ordinary breathing shift at room entry from being misreported as architectural stress.",
+    caveats:
+      "The quality score is an internal diagnostic, not a published validation metric. It tells you whether the repo should reason modestly or boldly from the respiration proxy; it does not certify clinical accuracy.",
+  },
+  {
     id: "q-s-07-edr-respiration",
     group: "question",
     category: "science",
     question: "What is the participant's breathing pattern, and does it track arousal?",
     order: 7,
-    title: "ECG-derived respiration rate and RSA amplitude over time",
+    title: "RR-derived respiration proxy, breathing rate, and RSA over time",
     caption:
-      "Breathing rate (RPM) and respiratory sinus arrhythmia amplitude extracted from beat-to-beat RR intervals, displayed in 60-second sliding windows.",
+      "A continuous RR-derived respiration proxy, plus breathing rate (RPM) and RSA amplitude, so the inferred breaths themselves can be inspected rather than merely summarized.",
     chartKind: "edr_respiration",
-    dataPaths: ["extended.windowed.mean_rpm", "extended.windowed.rsa_amplitude"],
+    dataPaths: ["extended.edr_proxy", "extended.windowed.mean_rpm", "extended.windowed.rsa_amplitude"],
     whatItShows:
-      "Two time-aligned line plots: the upper panel shows estimated breathing rate in breaths per minute (RPM), the lower panel shows RSA amplitude — the magnitude of the respiratory modulation of heart rate. Both are computed per 60-second window from the Polar H10's RR intervals using a bandpass filter at 0.15–0.40 Hz.",
+      "Three linked respiratory views. The top panel is the continuous RR-derived respiration proxy waveform reconstructed from beat-to-beat timing modulation, with inferred peaks and troughs marked. The middle panel shows estimated breathing rate in breaths per minute (RPM). The bottom panel shows RSA amplitude — the magnitude of the respiratory modulation of heart rate. These views support claims about respiratory timing, rate, and vagal coupling; they do not amount to a literal airflow trace or a direct measure of breath shape.",
     howToRead:
-      "A breathing rate between 12 and 20 RPM is typical at rest. A sudden increase suggests hyperventilation or exertion; a drop may indicate relaxation or breath-holding. RSA amplitude tracks vagal tone: higher values indicate stronger parasympathetic modulation (calm), while a drop in RSA during a stressor is the canonical vagal-withdrawal signature. If both RPM rises and RSA drops simultaneously, the participant is under sympathetic activation.",
+      "Start with the top proxy waveform and ask whether the peaks and troughs look physiologically coherent. If they do not, the RPM and RSA summaries below should be treated cautiously. A breathing rate between 12 and 20 RPM is typical at rest. A sudden increase suggests hyperventilation or exertion; a drop may indicate relaxation or breath-holding. RSA amplitude tracks vagal tone: higher values indicate stronger parasympathetic modulation, while a drop in RSA during a stressor is the canonical vagal-withdrawal signature. Use this page to distinguish respiratory timing effects from autonomic arousal, not to make strong claims about the detailed shape of inhalation and exhalation.",
     architecturalMeaning:
-      "Respiration was the single strongest predictor of stress in the WESAD benchmark (Schmidt et al., 2018, importance=0.35). In architecture-cognition protocols, RSA amplitude drops predict environmental stressors — acoustic load, spatial compression, crowding — more reliably than HR alone because RSA is not confounded by locomotion. A daylight-restoration study showing RSA recovery during the intervention phase has a stronger vagal-rebound claim than one reporting HR alone. If RSA stays flat while HR drops, the HR change may reflect cardiovascular conditioning rather than parasympathetic re-engagement.",
+      "Respiration was the single strongest predictor of stress in the WESAD benchmark (Schmidt et al., 2018, importance=0.35). In architecture-cognition protocols, RSA amplitude drops predict environmental stressors — acoustic load, spatial compression, crowding — more reliably than HR alone because RSA is less confounded by locomotion. A daylight-restoration study showing RSA recovery during the intervention phase has a stronger vagal-rebound claim than one reporting HR alone. More importantly, this page helps prevent overclaim: if room-by-room stress differences track breathing changes closely, the result may be respiratory-vagal rather than a generalized sympathetic stress response.",
     scienceNote:
-      "Respiratory sinus arrhythmia (RSA) is the beat-to-beat variation in heart rate driven by breathing: HR accelerates during inhalation and decelerates during exhalation. This oscillation is mediated by the vagus nerve and is the physiological basis for the high-frequency (0.15–0.40 Hz) component of heart rate variability. When the sympathetic nervous system activates under stress, vagal tone is withdrawn — breathing becomes shallower and faster, and the RSA modulation amplitude drops. This makes RSA a direct, real-time index of parasympathetic withdrawal that is not confounded by locomotion (unlike HR, which rises during walking regardless of stress) or by electrode adherence (unlike EDA, which drops when the skin dries). In the WESAD benchmark, features derived from respiration — particularly breathing rate variability and the amplitude of the respiratory oscillation in the RR tachogram — carried more discriminative power for binary stress classification (importance = 0.35) than heart rate (0.20) or electrodermal activity (~0.12). Healey & Picard (2005) independently confirmed that HR and EDA together reach 97% accuracy for stress detection, but that accuracy improves further when respiration is added as a third channel. For the Polar H10, which does not carry a dedicated respiratory sensor, we extract respiration from the RR intervals via ECG-Derived Respiration (EDR): a 4th-order Butterworth bandpass at 0.15–0.40 Hz applied to the interpolated RR timeseries, with peak detection to estimate instantaneous breathing rate and RSA amplitude per window.",
+      "Respiratory sinus arrhythmia (RSA) is the beat-to-beat variation in heart rate driven by breathing: HR accelerates during inhalation and decelerates during exhalation. This oscillation is mediated by the vagus nerve and is the physiological basis for the high-frequency (0.15–0.40 Hz) component of heart rate variability. When the sympathetic nervous system activates under stress, vagal tone is withdrawn — breathing becomes shallower and faster, and the RSA modulation amplitude drops. This makes RSA a direct, real-time index of parasympathetic withdrawal that is less confounded by locomotion than HR alone. In the WESAD benchmark, features derived from respiration — particularly breathing rate variability and the amplitude of the respiratory oscillation in the RR tachogram — carried more discriminative power for binary stress classification (importance = 0.35) than heart rate (0.20) or electrodermal activity (~0.12). In this repo, respiration is extracted from the available RR series by band-pass filtering the interpolated RR tachogram in the respiratory band and detecting coarse cycle peaks. That supports cautious claims about respiratory timing, rate, and RSA coupling. It does not warrant strong claims about detailed inspiratory or expiratory waveform morphology unless a direct respiration sensor exists.",
     calibrationGuide:
       "CURRENT FORMULA (V2.2 — 5-channel, WESAD-informed heuristic)\n"
       + "  stress = 0.25 × HR_norm + 0.25 × EDA_norm + 0.15 × phasic_norm\n"

@@ -54,6 +54,7 @@ from app.services.processing.features import (
     compute_hrv_frequency_features,
     compute_poincare_features,
     compute_time_domain_features,
+    rr_source_note_for,
 )
 from app.services.processing.stress import (
     STRESS_SCORE_LABEL,
@@ -248,6 +249,7 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
         eda_phasic_index=eda_phasic_index,
         stress_score=stress_score,
         rr_source=rr_source,
+        rr_source_note=rr_source_note_for(rr_source),
         vlf_ms2=freq_features.get("vlf_ms2"),
         lf_ms2=freq_features.get("lf_ms2"),
         hf_ms2=freq_features.get("hf_ms2"),

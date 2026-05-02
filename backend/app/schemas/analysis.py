@@ -118,6 +118,7 @@ class FeatureSummary(BaseModel):
     eda_phasic_index: float
     stress_score: float = Field(ge=0.0, le=1.0)
     rr_source: str = "derived_from_bpm"
+    rr_source_note: str | None = None
 
     # Frequency-domain HRV (available when native RR intervals are present)
     vlf_ms2: float | None = None

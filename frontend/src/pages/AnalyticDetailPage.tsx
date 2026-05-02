@@ -59,18 +59,24 @@ export const AnalyticDetailPage: React.FC = () => {
   const displayHeading = a.question ?? a.title;
   const chartLabel = a.question ? a.title : undefined;
   const scienceCaption = captionsForAnalytic(a, session);
+  const respirationSource = session.extended?.edr_proxy?.rr_source ?? session.result.feature_summary.rr_source;
+  const respirationSourceNote = session.extended?.edr_proxy?.rr_source_note ?? session.result.feature_summary.rr_source_note;
+  const standardChartHeight = a.chartKind === "edr_respiration" ? 560 : 430;
+  const largeChartHeight = a.chartKind === "edr_respiration" ? 760 : 620;
   const downloadSvg = () => {
     const svg = document.querySelector<SVGSVGElement>("#chart-frame svg");
     if (!svg) return;
     const clone = svg.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+    clone.setAttribute("overflow", "visible");
+    clone.removeAttribute("style");
     try {
       const bbox = svg.getBBox();
       const pad = 18;
       clone.setAttribute("viewBox", `${bbox.x - pad} ${bbox.y - pad} ${bbox.width + pad * 2} ${bbox.height + pad * 2}`);
       clone.setAttribute("width", `${Math.ceil(bbox.width + pad * 2)}`);
       clone.setAttribute("height", `${Math.ceil(bbox.height + pad * 2)}`);
-      clone.setAttribute("overflow", "visible");
-      clone.removeAttribute("style");
     } catch {
       // If getBBox fails, fall back to the rendered SVG geometry.
     }
@@ -156,10 +162,42 @@ export const AnalyticDetailPage: React.FC = () => {
       </div>
       <div className={largeChart ? "chart-with-event-key large" : "chart-with-event-key"}>
         <div id="chart-frame" className={largeChart ? "chart-frame large" : "chart-frame"}>
-          <ChartRenderer kind={a.chartKind} session={session} width={largeChart ? 1180 : 920} height={largeChart ? 620 : 430} />
+          <ChartRenderer
+            kind={a.chartKind}
+            session={session}
+            width={largeChart ? 1180 : 920}
+            height={largeChart ? largeChartHeight : standardChartHeight}
+          />
         </div>
         <EventIntervalLegend session={session} />
       </div>
+      {a.id === "q-s-07-edr-respiration" && (
+        <div
+          style={{
+            marginTop: 10,
+            marginBottom: 14,
+            padding: "10px 12px",
+            borderRadius: 6,
+            background:
+              respirationSource === "native_polar"
+                ? "rgba(0, 200, 150, 0.10)"
+                : respirationSource === "derived_from_ecg"
+                  ? "rgba(74, 111, 168, 0.14)"
+                  : "rgba(232, 135, 42, 0.14)",
+            borderLeft:
+              respirationSource === "native_polar"
+                ? "3px solid #00C896"
+                : respirationSource === "derived_from_ecg"
+                  ? "3px solid #4A6FA8"
+                  : "3px solid #E8872A",
+            color: "#D8D8D8",
+            fontSize: 13,
+            lineHeight: 1.55,
+          }}
+        >
+          <b>Respiration provenance:</b> {respirationSourceNote ?? respirationProvenanceNote(respirationSource)}
+        </div>
+      )}
       <EventMarkerApplicabilityNote analytic={a} session={session} />
       <EventIntervalTable session={session} />
 
@@ -598,8 +636,14 @@ function findingForAnalytic(id: string, session: StoredSession): string {
       return fs.nn50 == null
         ? "Finding: ectopic-rate details are not available from this session payload. Read the tachogram visually for sudden isolated jumps before trusting HRV estimates."
         : `Finding: the corrected RR series supports HRV estimation; NN50 is ${fs.nn50}, and pNN50 is ${fs.pnn50?.toFixed(1) ?? "not available"}%. Read isolated spikes as possible ectopic or corrected beats, and sustained bands as the physiological rhythm.`;
+    case "q-d-05-edr-quality":
+      return edrQualityCaption(session);
     case "q-s-07-edr-respiration":
-      return respirationCaption(ext?.windowed?.mean_rpm ?? [], ext?.windowed?.rsa_amplitude ?? []);
+      return respirationCaption(
+        ext?.windowed?.mean_rpm ?? [],
+        ext?.windowed?.rsa_amplitude ?? [],
+        ext?.edr_proxy?.rr_source ?? fs.rr_source,
+      );
     case "q-s-08-sympathovagal-nu":
       return fs.lf_nu == null || fs.hf_nu == null
         ? "Finding: normalized LF/HF units are unavailable, probably because the recording lacks enough stable RR data. Read the page as a data-sufficiency warning rather than a physiology result."
@@ -662,13 +706,30 @@ function rrHistogramCaption(rr: number[], flags: string, source: string): string
   return `Finding: ${confidence}. The histogram is centred near ${rs!.median.toFixed(0)} ms, spans ${rs!.min.toFixed(0)}-${rs!.max.toFixed(0)} ms, and has ${outsidePct.toFixed(1)}% outside the 300-2000 ms physiological window. Read the central mass as the rhythm and the tails as possible artifact or arrhythmia.`;
 }
 
-function respirationCaption(rpmRaw: Array<number | null>, rsaRaw: Array<number | null>): string {
+function respirationCaption(
+  rpmRaw: Array<number | null>,
+  rsaRaw: Array<number | null>,
+  rrSource: string | null | undefined,
+): string {
   const rpm = seriesStats(rpmRaw);
   const rsa = seriesStats(rsaRaw);
   if (!rpm && !rsa) return "Finding: a respiration proxy is not available or not stable enough in this session. Do not interpret HRV shifts as stress until breathing has been ruled out.";
-  if (rpm && rsa) return `Finding: breathing averages ${rpm.mean.toFixed(1)} RPM and ${rpm.direction} by ${Math.abs(rpm.delta).toFixed(1)} RPM, while RSA ${rsa.direction} by ${Math.abs(rsa.delta).toFixed(1)}. Read the two traces together: HRV changes that track breathing are respiratory, not necessarily stress.`;
-  if (rpm) return `Finding: breathing averages ${rpm.mean.toFixed(1)} RPM and ${rpm.direction} by ${Math.abs(rpm.delta).toFixed(1)} RPM. Read this trace before attributing HRV movement to arousal.`;
-  return `Finding: RSA is available and ${rsa!.direction} by ${Math.abs(rsa!.delta).toFixed(1)}, but breathing rate is not stable enough to display. Read vagal conclusions cautiously.`;
+  const provenance = respirationProvenanceNote(rrSource);
+  if (rpm && rsa) return `Finding: breathing averages ${rpm.mean.toFixed(1)} RPM and ${rpm.direction} by ${Math.abs(rpm.delta).toFixed(1)} RPM, while RSA ${rsa.direction} by ${Math.abs(rsa.delta).toFixed(1)}. Read the two traces together: HRV changes that track breathing are respiratory, not necessarily stress. ${provenance}`;
+  if (rpm) return `Finding: breathing averages ${rpm.mean.toFixed(1)} RPM and ${rpm.direction} by ${Math.abs(rpm.delta).toFixed(1)} RPM. Read this trace before attributing HRV movement to arousal. ${provenance}`;
+  return `Finding: RSA is available and ${rsa!.direction} by ${Math.abs(rsa!.delta).toFixed(1)}, but breathing rate is not stable enough to display. Read vagal conclusions cautiously. ${provenance}`;
+}
+
+function edrQualityCaption(session: StoredSession): string {
+  const quality = session.extended?.edr_proxy?.quality;
+  const rrSourceNote = session.extended?.edr_proxy?.rr_source_note ?? session.result.feature_summary.rr_source_note;
+  if (!quality) return "Finding: this session does not carry a respiration-proxy quality bundle, so the respiration page should be treated as descriptive only.";
+  const overall = quality.overall_confidence ?? quality.signal_confidence ?? null;
+  const verdict = quality.verdict ?? "unknown";
+  const duration = quality.duration_s;
+  const count = quality.usable_breath_count;
+  const stability = quality.interval_cv != null ? Math.max(0, 1 - quality.interval_cv) : null;
+  return `Finding: the respiration proxy is rated ${verdict} at ${fmt(overall != null ? overall * 100 : null, 0)}%, based on ${fmt(duration, 1)} s of usable signal, ${count} usable breath intervals, and rhythm stability ${fmt(stability != null ? stability * 100 : null, 0)}%. ${rrSourceNote ?? "RR provenance note unavailable."}`;
 }
 
 function durationSeconds(ts: Array<{ timestamp_ms?: number }>): number {
@@ -777,6 +838,9 @@ function showsIntervalArousal(a: AnalyticEntry): boolean {
 }
 
 function whatItShowsForAnalytic(a: AnalyticEntry, session: StoredSession): string {
+  if (a.id === "q-s-07-edr-respiration") {
+    return `${a.whatItShows} ${session.extended?.edr_proxy?.rr_source_note ?? session.result.feature_summary.rr_source_note ?? respirationProvenanceNote(session.extended?.edr_proxy?.rr_source ?? session.result.feature_summary.rr_source)}`;
+  }
   if (!showsIntervalArousal(a)) return a.whatItShows;
   const rows = allIntervalStats(session).filter((row) => row.interval.key.toLowerCase() !== "baseline");
   if (rows.length === 0) return a.whatItShows;
@@ -784,6 +848,9 @@ function whatItShowsForAnalytic(a: AnalyticEntry, session: StoredSession): strin
 }
 
 function howToReadForAnalytic(a: AnalyticEntry, session: StoredSession): string {
+  if (a.id === "q-s-07-edr-respiration") {
+    return `${a.howToRead} ${respirationInterpretationCaveat(session.extended?.edr_proxy?.rr_source ?? session.result.feature_summary.rr_source)}`;
+  }
   if (!showsIntervalArousal(a)) return a.howToRead;
   const rows = allIntervalStats(session).filter((row) => row.interval.key.toLowerCase() !== "baseline");
   if (rows.length === 0) return a.howToRead;
@@ -791,6 +858,9 @@ function howToReadForAnalytic(a: AnalyticEntry, session: StoredSession): string 
 }
 
 function architecturalMeaningForAnalytic(a: AnalyticEntry, session: StoredSession): string {
+  if (a.id === "q-s-07-edr-respiration") {
+    return `${a.architecturalMeaning} ${respirationInterpretationCaveat(session.extended?.edr_proxy?.rr_source ?? session.result.feature_summary.rr_source)}`;
+  }
   if (!showsIntervalArousal(a)) return a.architecturalMeaning;
   const rows = allIntervalStats(session).filter((row) => row.interval.key.toLowerCase() !== "baseline");
   if (rows.length === 0) return a.architecturalMeaning;
@@ -807,4 +877,30 @@ function lowerFirst(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return trimmed;
   return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+}
+
+function respirationProvenanceNote(rrSource: string | null | undefined): string {
+  switch (rrSource) {
+    case "native_polar":
+      return "Here the proxy is reconstructed from native Polar RR intervals, which is the strongest provenance this repo can offer without a dedicated respiration belt.";
+    case "derived_from_ecg":
+      return "Here the proxy is reconstructed from RR intervals derived in-app from raw ECG, which is still a real beat-level source but weaker than native RR export.";
+    case "derived_from_bpm":
+      return "Here the proxy is reconstructed from BPM-derived RR surrogates, so it should be read as a coarse timing cue rather than as a high-confidence breath morphology trace.";
+    default:
+      return "The provenance of the underlying RR series should be checked before treating this proxy as strong respiratory evidence.";
+  }
+}
+
+function respirationInterpretationCaveat(rrSource: string | null | undefined): string {
+  switch (rrSource) {
+    case "native_polar":
+      return "Because the underlying RR series is native, this page can be used as a serious disambiguation check on whether HRV changes are respiratory or stress-like.";
+    case "derived_from_ecg":
+      return "Because the underlying RR series was reconstructed from raw ECG, the page is still useful, but claims about fine respiratory timing should remain modest.";
+    case "derived_from_bpm":
+      return "Because the underlying RR series was reconstructed from BPM rather than native beat intervals, do not treat the proxy waveform as precise evidence about inhalation-exhalation shape; use it only to temper overconfident stress claims.";
+    default:
+      return "Without clear RR provenance, the chart should be used as a cautionary adjunct, not as a decisive respiratory adjudicator.";
+  }
 }

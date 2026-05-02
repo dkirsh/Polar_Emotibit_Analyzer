@@ -37,7 +37,14 @@ from app.services.processing.extended_analytics import (
     compute_windowed_features,
     decompose_stress,
 )
-from app.services.processing.features import _get_rr_intervals, compute_edr
+from app.services.processing.features import (
+    _get_rr_intervals,
+    compute_edr,
+    compute_edr_detailed,
+    compute_edr_detailed_from_rr_ms,
+    rr_source_confidence_for,
+    rr_source_note_for,
+)
 from app.services.processing.features import (
     compute_eda_features,
     compute_hrv_features,
@@ -85,6 +92,85 @@ def _persist_store() -> None:
         # a successful analysis into a failed upload. The session will be
         # available until the backend process exits.
         log.warning("Could not persist session store to %s: %s", _STORE_PATH, exc)
+
+
+def _migrate_stored_sessions() -> bool:
+    """Upgrade older stored sessions to the current frontend contract."""
+    changed = False
+    for record in _SESSION_STORE.values():
+        if _maybe_backfill_edr_proxy(record):
+            changed = True
+    return changed
+
+
+def _maybe_backfill_edr_proxy(record: dict[str, Any]) -> bool:
+    extended = record.get("extended")
+    if not isinstance(extended, dict):
+        return False
+    rr_source = (
+        ((extended.get("psd") or {}).get("rr_source"))
+        or ((record.get("result") or {}).get("feature_summary") or {}).get("rr_source")
+        or "none"
+    )
+    rr_source_note = (
+        ((record.get("result") or {}).get("feature_summary") or {}).get("rr_source_note")
+        or rr_source_note_for(rr_source)
+    )
+
+    feature_summary = ((record.get("result") or {}).get("feature_summary") or {})
+    changed = False
+    if isinstance(feature_summary, dict) and not feature_summary.get("rr_source_note"):
+        feature_summary["rr_source_note"] = rr_source_note
+        changed = True
+
+    edr_proxy = extended.get("edr_proxy")
+    if not isinstance(edr_proxy, dict):
+        rr_series = extended.get("rr_series_ms")
+        if not isinstance(rr_series, list) or len(rr_series) < 30:
+            return changed
+        edr_proxy = compute_edr_detailed_from_rr_ms(rr_series)
+        if not edr_proxy.get("time_s"):
+            return changed
+        extended["edr_proxy"] = edr_proxy
+        changed = True
+
+    if edr_proxy.get("rr_source") != rr_source:
+        edr_proxy["rr_source"] = rr_source
+        changed = True
+    if edr_proxy.get("rr_source_note") != rr_source_note:
+        edr_proxy["rr_source_note"] = rr_source_note
+        changed = True
+    quality = edr_proxy.get("quality")
+    if not isinstance(quality, dict):
+        quality = {}
+        edr_proxy["quality"] = quality
+        changed = True
+    signal_confidence = quality.get("signal_confidence")
+    source_confidence = rr_source_confidence_for(rr_source)
+    overall_confidence = (
+        round(float((float(signal_confidence) + source_confidence) / 2.0), 3)
+        if isinstance(signal_confidence, (int, float))
+        else round(float(source_confidence), 3)
+    )
+    rounded_source_confidence = round(float(source_confidence), 3)
+    if quality.get("source_confidence") != rounded_source_confidence:
+        quality["source_confidence"] = rounded_source_confidence
+        changed = True
+    if quality.get("overall_confidence") != overall_confidence:
+        quality["overall_confidence"] = overall_confidence
+        changed = True
+    if overall_confidence >= 0.8:
+        verdict = "strong"
+    elif overall_confidence >= 0.6:
+        verdict = "usable"
+    elif overall_confidence >= 0.4:
+        verdict = "weak"
+    else:
+        verdict = "insufficient"
+    if quality.get("verdict") != verdict:
+        quality["verdict"] = verdict
+        changed = True
+    return changed
 
 
 _load_store_from_disk()
@@ -158,6 +244,9 @@ async def analyze(
 
     try:
         result = run_analysis(em_df, pol_df)
+        result.feature_summary.rr_source_note = str(
+            pol_df.attrs.get("rr_source_note", rr_source_note_for(result.feature_summary.rr_source))
+        )
     except InsufficientDataError as exc:
         # F2 + F6 fix 2026-04-21: insufficient input is a client-data
         # problem, not a pipeline failure. Return 422 with a structured
@@ -194,6 +283,7 @@ async def analyze(
 
         # Compute session-level EDR for the decomposition
         session_edr = compute_edr(cleaned)
+        session_edr_detailed = compute_edr_detailed(cleaned)
         session_rsa = session_edr["rsa_amplitude"]
         has_rsa = session_rsa is not None
 
@@ -211,8 +301,29 @@ async def analyze(
         st = compute_spectral_trajectory(cleaned, window_s=120.0, step_s=60.0)
         psd = compute_full_psd(cleaned)
         rr_arr, rr_source = _get_rr_intervals(cleaned)
+        rr_source_note = str(pol_df.attrs.get("rr_source_note", rr_source_note_for(rr_source)))
         summ = compute_summary_stats(cleaned)
         inf = compute_inference_summary(cleaned) if len(cleaned) >= 10 else None
+        edr_quality = session_edr_detailed.get("quality")
+        if not isinstance(edr_quality, dict):
+            edr_quality = {}
+        signal_confidence = edr_quality.get("signal_confidence")
+        source_confidence = rr_source_confidence_for(rr_source)
+        overall_confidence = (
+            round(float((float(signal_confidence) + source_confidence) / 2.0), 3)
+            if isinstance(signal_confidence, (int, float))
+            else round(float(source_confidence), 3)
+        )
+        edr_quality["source_confidence"] = round(float(source_confidence), 3)
+        edr_quality["overall_confidence"] = overall_confidence
+        if overall_confidence >= 0.8:
+            edr_quality["verdict"] = "strong"
+        elif overall_confidence >= 0.6:
+            edr_quality["verdict"] = "usable"
+        elif overall_confidence >= 0.4:
+            edr_quality["verdict"] = "weak"
+        else:
+            edr_quality["verdict"] = "insufficient"
 
         # Prefer the richer v2 decomposition when the session summary
         # includes it; fall back to the older v1 decomposition only for
@@ -270,6 +381,22 @@ async def analyze(
                 "lf_power": st.lf_power,
                 "hf_power": st.hf_power,
                 "lf_hf_ratio": st.lf_hf_ratio,
+            },
+            "edr_proxy": {
+                "source": session_edr_detailed.get("source"),
+                "rr_source": rr_source,
+                "rr_source_note": rr_source_note,
+                "time_s": session_edr_detailed.get("time_s", []),
+                "signal": session_edr_detailed.get("signal", []),
+                "peak_times_s": session_edr_detailed.get("peak_times_s", []),
+                "trough_times_s": session_edr_detailed.get("trough_times_s", []),
+                "breath_intervals_s": session_edr_detailed.get("breath_intervals_s", []),
+                "inspiratory_times_s": session_edr_detailed.get("inspiratory_times_s", []),
+                "expiratory_times_s": session_edr_detailed.get("expiratory_times_s", []),
+                "mean_rpm": session_edr_detailed.get("mean_rpm"),
+                "rpm_std": session_edr_detailed.get("rpm_std"),
+                "rsa_amplitude": session_edr_detailed.get("rsa_amplitude"),
+                "quality": edr_quality,
             },
             "psd": {
                 "frequencies_hz": psd.get("frequencies_hz", []),
@@ -469,6 +596,7 @@ def _build_polar_only_result(df: pd.DataFrame) -> tuple[AnalysisResponse, dict[s
         eda_phasic_index=0.0,
         stress_score=0.0,
         rr_source=rr_source,
+        rr_source_note=rr_source_note_for(rr_source),
         vlf_ms2=freq.get("vlf_ms2"),
         lf_ms2=freq.get("lf_ms2"),
         hf_ms2=freq.get("hf_ms2"),
@@ -537,6 +665,7 @@ def _build_emotibit_only_result(df: pd.DataFrame) -> tuple[AnalysisResponse, dic
         eda_phasic_index=eda_phasic_index,
         stress_score=0.0,
         rr_source="none",
+        rr_source_note=rr_source_note_for("none"),
     )
     quality_flags = [
         "EmotiBit-only analysis: EDA and motion inspection are available; HRV, stress, and synchronization charts require a Polar file.",
@@ -609,6 +738,7 @@ def _subsample_timeseries(df: pd.DataFrame, max_points: int = 1000) -> list[dict
 @router.get("/sessions", response_model=list[SessionSummary])
 def list_sessions(limit: int = 10) -> list[SessionSummary]:
     """List recent sessions (for the view 1 Recent-Sessions table)."""
+    _migrate_stored_sessions()
     items = sorted(
         _SESSION_STORE.values(),
         key=lambda s: s.get("analyzed_at", ""),
@@ -630,6 +760,7 @@ def list_sessions(limit: int = 10) -> list[SessionSummary]:
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
 def get_session(session_id: str) -> SessionDetail:
     """Fetch one session's full metadata + analysis response."""
+    _migrate_stored_sessions()
     if session_id not in _SESSION_STORE:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -9,6 +9,7 @@ export type FeatureSummary = {
   eda_phasic_index: number;
   stress_score: number;
   rr_source: "native_polar" | "derived_from_ecg" | "derived_from_bpm" | "none";
+  rr_source_note?: string | null;
   vlf_ms2: number | null;
   lf_ms2: number | null;
   hf_ms2: number | null;
@@ -165,6 +166,34 @@ export type ExtendedAnalytics = {
   stress_decomposition: StressDecomposition | null;
   windowed: WindowedFeatures | null;
   spectral_trajectory: SpectralTrajectory | null;
+  edr_proxy?: {
+    source?: string | null;
+    rr_source?: "native_polar" | "derived_from_ecg" | "derived_from_bpm" | "none" | string | null;
+    rr_source_note?: string | null;
+    time_s: number[];
+    signal: number[];
+    peak_times_s: number[];
+    trough_times_s: number[];
+    breath_intervals_s: number[];
+    inspiratory_times_s: number[];
+    expiratory_times_s: number[];
+    mean_rpm?: number | null;
+    rpm_std?: number | null;
+    rsa_amplitude?: number | null;
+    quality?: {
+      duration_s?: number | null;
+      peak_count: number;
+      trough_count: number;
+      usable_breath_count: number;
+      paired_cycle_fraction?: number | null;
+      interval_cv?: number | null;
+      plausible_rate_fraction?: number | null;
+      signal_confidence?: number | null;
+      source_confidence?: number | null;
+      overall_confidence?: number | null;
+      verdict?: string | null;
+    } | null;
+  } | null;
   psd: PsdData;
   rr_series_ms: number[];
   descriptive_stats: DescriptiveStats;
