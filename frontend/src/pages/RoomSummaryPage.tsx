@@ -41,6 +41,7 @@ const CHART_H = 640;
 const AROUSAL_ONLY_CHART_H = 470;
 const AROUSAL_COLOR = "#00C896";
 const STRESS_COLOR = "#E8872A";
+const MIN_WINDOWS_FOR_INFERENCE = 4;
 
 export const RoomSummaryPage: React.FC = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -331,13 +332,13 @@ function RankedArousalChart({
   const ticks = [-maxAbs, -maxAbs / 2, 0, maxAbs / 2, maxAbs];
   const significantNeighbors = adjacentComparisons
     .map((comparison, index) => ({ ...comparison, index }))
-    .filter((comparison) => comparison.p !== null && comparison.p < 0.05);
+    .filter((comparison) => isInferenceReady(comparison.left, comparison.right) && comparison.p !== null && comparison.p < 0.05);
 
   return (
     <svg width={CHART_W} height={AROUSAL_ONLY_CHART_H} role="img" aria-label="Ranked arousal by room, negative plotted upward">
       <rect width={CHART_W} height={AROUSAL_ONLY_CHART_H} fill={PALETTE.bg} />
       <text x={padL} y={30} fill={PALETTE.text} fontSize="18" fontWeight="700">Arousal by room, ranked high to low on plot</text>
-      <text x={padL} y={52} fill={PALETTE.sub} fontSize="12">ERP-style polarity: negative values plot upward; brackets show significant neighboring-room differences.</text>
+      <text x={padL} y={52} fill={PALETTE.sub} fontSize="12">ERP-style polarity: negative values plot upward; brackets require p &lt; .05 and enough windows.</text>
 
       {ticks.map((tick) => {
         const y = arousalY(tick, maxAbs, padT, plotH);
@@ -419,30 +420,39 @@ function ArousalRankTable({
               <th>Rank</th>
               <th>Room</th>
               <th>Arousal</th>
+              <th>n</th>
+              <th>SD</th>
               <th>Next room</th>
               <th>Next arousal</th>
+              <th>Next n</th>
+              <th>Next SD</th>
               <th>Gap</th>
               <th>p vs next</th>
               <th>d vs next</th>
-              <th>More arousing?</th>
+              <th>Inference</th>
             </tr>
           </thead>
           <tbody>
             {ranked.map((row, index) => {
               const comparison = adjacentComparisons[index] ?? null;
-              const significant = comparison?.p !== null && comparison?.p !== undefined && comparison.p < 0.05;
+              const ready = comparison !== null && isInferenceReady(comparison.left, comparison.right);
+              const significant = ready && comparison?.p !== null && comparison?.p !== undefined && comparison.p < 0.05;
               return (
               <tr key={row.interval.key}>
                 <td className="num">{index + 1}</td>
                 <td>{row.interval.label}</td>
                 <td className="num">{formatSigned(row.arousal.mean, 3)}</td>
+                <td className="num">{row.arousal.n}</td>
+                <td className="num">{formatPlain(row.arousal.sd, 3)}</td>
                 <td>{comparison?.right.interval.label ?? "none"}</td>
                 <td className="num">{formatSigned(comparison?.right.arousal.mean ?? null, 3)}</td>
+                <td className="num">{comparison?.right.arousal.n ?? "n/a"}</td>
+                <td className="num">{formatPlain(comparison?.right.arousal.sd ?? null, 3)}</td>
                 <td className="num">{formatSigned(comparison?.meanDiff ?? null, 3)}</td>
                 <td className="num">{formatP(comparison?.p ?? null)}</td>
                 <td className="num">{formatD(comparison?.d ?? null)}</td>
                 <td className={significant ? "sig yes" : "sig"}>
-                  {comparison ? (significant ? "yes" : "no") : "n/a"}
+                  {comparison ? inferenceLabel(comparison) : "n/a"}
                 </td>
               </tr>
               );
@@ -473,6 +483,15 @@ function arousalY(value: number, maxAbs: number, padT: number, plotH: number): n
   return padT + ((value + maxAbs) / (maxAbs * 2 || 1)) * plotH;
 }
 
+function isInferenceReady(left: RoomRow, right: RoomRow): boolean {
+  return left.arousal.n >= MIN_WINDOWS_FOR_INFERENCE && right.arousal.n >= MIN_WINDOWS_FOR_INFERENCE;
+}
+
+function inferenceLabel(comparison: ArousalPairwiseComparison): string {
+  if (!isInferenceReady(comparison.left, comparison.right)) return "exploratory";
+  return comparison.p !== null && comparison.p < 0.05 ? "yes" : "no";
+}
+
 function shortLabel(label: string): string {
   return label.length > 14 ? `${label.slice(0, 13)}...` : label;
 }
@@ -489,6 +508,10 @@ function formatP(value: number | null): string {
 
 function formatD(value: number | null): string {
   return value === null ? "n/a" : value.toFixed(2);
+}
+
+function formatPlain(value: number | null, digits: number): string {
+  return value === null ? "n/a" : value.toFixed(digits);
 }
 
 function formatSigned(value: number | null, digits: number): string {
