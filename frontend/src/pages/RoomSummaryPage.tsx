@@ -28,6 +28,14 @@ type PairwiseDifference = {
   d: number | null;
 };
 
+type ArousalPairwiseComparison = {
+  left: RoomRow;
+  right: RoomRow;
+  meanDiff: number | null;
+  p: number | null;
+  d: number | null;
+};
+
 const CHART_W = 1120;
 const CHART_H = 640;
 const AROUSAL_ONLY_CHART_H = 470;
@@ -47,6 +55,8 @@ export const RoomSummaryPage: React.FC = () => {
 
   const rows = useMemo(() => (session ? roomSummaryRows(session) : []), [session]);
   const comparisons = useMemo(() => significantRoomDifferences(rows), [rows]);
+  const rankedRows = useMemo(() => rankedArousalRows(rows), [rows]);
+  const adjacentArousalComparisons = useMemo(() => adjacentRankedArousalComparisons(rankedRows), [rankedRows]);
 
   if (error) return (
     <main className="page">
@@ -76,13 +86,13 @@ export const RoomSummaryPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="chart-frame large">
+      <div className="chart-frame large room-summary-chart-spacer">
+        <RankedArousalChart ranked={rankedRows} adjacentComparisons={adjacentArousalComparisons} />
+      </div>
+      <ArousalRankTable ranked={rankedRows} adjacentComparisons={adjacentArousalComparisons} />
+      <div className="chart-frame large room-summary-chart-spacer">
         <RoomSummaryChart rows={rows} comparisons={comparisons} />
       </div>
-      <div className="chart-frame large room-summary-chart-spacer">
-        <RankedArousalChart rows={rows} />
-      </div>
-      <ArousalDifferenceTable differences={comparisons.filter((c) => c.metric === "arousal")} />
     </main>
   );
 };
@@ -175,6 +185,28 @@ function significantRoomDifferences(rows: RoomRow[]): PairwiseDifference[] {
     }
   }
   return differences.sort((a, b) => (a.p ?? 1) - (b.p ?? 1)).slice(0, 10);
+}
+
+function rankedArousalRows(rows: RoomRow[]): RoomRow[] {
+  return rows
+    .filter((row) => row.arousal.mean !== null)
+    .sort((a, b) => (a.arousal.mean ?? Infinity) - (b.arousal.mean ?? Infinity));
+}
+
+function adjacentRankedArousalComparisons(ranked: RoomRow[]): ArousalPairwiseComparison[] {
+  return ranked.slice(0, -1).map((row, index) => {
+    const next = ranked[index + 1];
+    const diff = compareMetrics(row.arousal, next.arousal);
+    const leftMean = row.arousal.mean;
+    const rightMean = next.arousal.mean;
+    return {
+      left: row,
+      right: next,
+      meanDiff: leftMean !== null && rightMean !== null ? rightMean - leftMean : null,
+      p: diff.p,
+      d: diff.d,
+    };
+  });
 }
 
 function compareMetrics(a: RoomMetric, b: RoomMetric): { p: number | null; d: number | null } {
@@ -276,11 +308,13 @@ function RoomSummaryChart({ rows, comparisons }: { rows: RoomRow[]; comparisons:
   );
 }
 
-function RankedArousalChart({ rows }: { rows: RoomRow[] }) {
-  const ranked = rows
-    .filter((row) => row.arousal.mean !== null)
-    .sort((a, b) => (a.arousal.mean ?? Infinity) - (b.arousal.mean ?? Infinity));
-
+function RankedArousalChart({
+  ranked,
+  adjacentComparisons,
+}: {
+  ranked: RoomRow[];
+  adjacentComparisons: ArousalPairwiseComparison[];
+}) {
   if (ranked.length === 0) return <div style={{ color: PALETTE.sub }}>No room-marker arousal data available.</div>;
 
   const padL = 78;
@@ -295,12 +329,9 @@ function RankedArousalChart({ rows }: { rows: RoomRow[] }) {
   const barW = Math.max(24, Math.min(58, roomW * 0.48));
   const zeroY = arousalY(0, maxAbs, padT, plotH);
   const ticks = [-maxAbs, -maxAbs / 2, 0, maxAbs / 2, maxAbs];
-  const significantNeighbors = ranked.slice(0, -1).map((row, index) => ({
-    left: row,
-    right: ranked[index + 1],
-    index,
-    ...compareMetrics(row.arousal, ranked[index + 1].arousal),
-  })).filter((comparison) => comparison.p !== null && comparison.p < 0.05);
+  const significantNeighbors = adjacentComparisons
+    .map((comparison, index) => ({ ...comparison, index }))
+    .filter((comparison) => comparison.p !== null && comparison.p < 0.05);
 
   return (
     <svg width={CHART_W} height={AROUSAL_ONLY_CHART_H} role="img" aria-label="Ranked arousal by room, negative plotted upward">
@@ -369,29 +400,53 @@ function RankedArousalChart({ rows }: { rows: RoomRow[] }) {
   );
 }
 
-function ArousalDifferenceTable({ differences }: { differences: PairwiseDifference[] }) {
+function ArousalRankTable({
+  ranked,
+  adjacentComparisons,
+}: {
+  ranked: RoomRow[];
+  adjacentComparisons: ArousalPairwiseComparison[];
+}) {
   return (
-    <section className="room-summary-table" aria-label="Significant arousal differences">
-      <h2>Arousal differences, p &lt; .05</h2>
-      {differences.length === 0 ? (
-        <p>No room pairs reached p &lt; .05 for arousal.</p>
+    <section className="room-summary-table" aria-label="Arousal rank order and adjacent differences">
+      <h2>Arousal rank order and adjacent differences</h2>
+      {ranked.length === 0 ? (
+        <p>No rooms are available for arousal ranking.</p>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>Room pair</th>
-              <th>p value</th>
-              <th>Cohen's d</th>
+              <th>Rank</th>
+              <th>Room</th>
+              <th>Arousal</th>
+              <th>Next room</th>
+              <th>Next arousal</th>
+              <th>Gap</th>
+              <th>p vs next</th>
+              <th>d vs next</th>
+              <th>More arousing?</th>
             </tr>
           </thead>
           <tbody>
-            {differences.map((difference) => (
-              <tr key={`${difference.left}-${difference.right}-${difference.p}`}>
-                <td>{difference.left} vs {difference.right}</td>
-                <td className="num">{formatP(difference.p)}</td>
-                <td className="num">{formatD(difference.d)}</td>
+            {ranked.map((row, index) => {
+              const comparison = adjacentComparisons[index] ?? null;
+              const significant = comparison?.p !== null && comparison?.p !== undefined && comparison.p < 0.05;
+              return (
+              <tr key={row.interval.key}>
+                <td className="num">{index + 1}</td>
+                <td>{row.interval.label}</td>
+                <td className="num">{formatSigned(row.arousal.mean, 3)}</td>
+                <td>{comparison?.right.interval.label ?? "none"}</td>
+                <td className="num">{formatSigned(comparison?.right.arousal.mean ?? null, 3)}</td>
+                <td className="num">{formatSigned(comparison?.meanDiff ?? null, 3)}</td>
+                <td className="num">{formatP(comparison?.p ?? null)}</td>
+                <td className="num">{formatD(comparison?.d ?? null)}</td>
+                <td className={significant ? "sig yes" : "sig"}>
+                  {comparison ? (significant ? "yes" : "no") : "n/a"}
+                </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -434,6 +489,11 @@ function formatP(value: number | null): string {
 
 function formatD(value: number | null): string {
   return value === null ? "n/a" : value.toFixed(2);
+}
+
+function formatSigned(value: number | null, digits: number): string {
+  if (value === null) return "n/a";
+  return value >= 0 ? `+${value.toFixed(digits)}` : value.toFixed(digits);
 }
 
 function differenceLine(label: string, differences: PairwiseDifference[]): string {
