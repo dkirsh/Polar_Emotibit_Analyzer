@@ -111,12 +111,14 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
   if (pts.length < 2) return <Empty msg="Not enough timeseries data" />;
   const t0 = pts[0].timestamp_ms!;
   const t1 = pts[pts.length - 1].timestamp_ms!;
+  const tPadRight = Math.max(1, (t1 - t0) * 0.035);
+  const t1Plot = t1 + tPadRight;
   const hr = pts.map((p) => p.hr_bpm!);
   const eda = pts.map((p) => p.eda_us!);
   const hrMin = Math.min(...hr), hrMax = Math.max(...hr);
   const edaMin = Math.min(...eda), edaMax = Math.max(...eda);
-  const hrPeak = maxIndex(hr);
-  const edaPeak = maxIndex(eda);
+  const hrPeak = rightmostMaxIndex(hr);
+  const edaPeak = rightmostMaxIndex(eda);
   const padX = 42;
   const topPad = 58;
   const panelGap = 26;
@@ -126,7 +128,7 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
   const hrTop = topPad;
   const edaTop = topPad + panelH + panelGap;
   const axisY = Math.min(height - 24, edaTop + panelH);
-  const toX = (t: number) => padX + ((t - t0) / (t1 - t0 || 1)) * w;
+  const toX = (t: number) => padX + ((t - t0) / (t1Plot - t0 || 1)) * w;
   const hrPlotH = Math.max(20, panelH - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
   const edaPlotH = Math.max(20, panelH - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
   const [hrDomainMin, hrDomainMax] = paddedDomain(hrMin, hrMax, 0.06, 0.14);
@@ -138,7 +140,7 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
   return (
     <svg width={width} height={height} role="img" aria-label="HR and EDA timeseries overlay">
 	      <rect width={width} height={height} fill={PALETTE.bg} />
-      <EventLinesMs session={session} t0={t0} t1={t1} toX={toX} y1={hrTop} y2={height - 24} width={width} />
+      <EventLinesMs session={session} t0={t0} t1={t1Plot} toX={toX} y1={hrTop} y2={height - 24} width={width} />
 	      {/* HR panel */}
       <text x={padX} y={24} fill={PALETTE.hr} fontSize="12" fontWeight="600">HR (bpm)</text>
       <text x={padX} y={40} fill={PALETTE.sub} fontSize="10">{hrMin.toFixed(0)} - {hrMax.toFixed(0)}</text>
@@ -158,7 +160,7 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
       {/* Axes */}
       <line x1={padX} y1={axisY} x2={padX + w} y2={axisY} stroke={PALETTE.grid} />
       <text x={padX} y={height - 5} fill={PALETTE.sub} fontSize="10">0 s</text>
-      <text x={width - padX - 40} y={height - 5} fill={PALETTE.sub} fontSize="10">{((t1 - t0) / 1000).toFixed(0)} s</text>
+      <text x={labelX(toX(t1), width, 44)} y={height - 5} fill={PALETTE.sub} fontSize="10">{((t1 - t0) / 1000).toFixed(0)} s</text>
     </svg>
   );
 }
@@ -1259,6 +1261,15 @@ function maxIndex(values: number[]): number {
     if (values[i] > values[best]) best = i;
   }
   return best;
+}
+
+function rightmostMaxIndex(values: number[]): number {
+  if (values.length === 0) return 0;
+  const max = Math.max(...values);
+  for (let i = values.length - 1; i >= 0; i -= 1) {
+    if (Math.abs(values[i] - max) < 1e-9) return i;
+  }
+  return maxIndex(values);
 }
 
 function paddedDomain(min: number, max: number, lowFrac = 0.04, highFrac = 0.1): [number, number] {

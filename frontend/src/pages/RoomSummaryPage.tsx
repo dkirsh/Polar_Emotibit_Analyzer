@@ -78,6 +78,7 @@ export const RoomSummaryPage: React.FC = () => {
       <div className="chart-frame large">
         <RoomSummaryChart rows={rows} comparisons={comparisons} />
       </div>
+      <ArousalDifferenceTable differences={comparisons.filter((c) => c.metric === "arousal")} />
     </main>
   );
 };
@@ -212,7 +213,6 @@ function RoomSummaryChart({ rows, comparisons }: { rows: RoomRow[]; comparisons:
   const roomW = plotW / rows.length;
   const barW = Math.max(10, Math.min(38, roomW * 0.26));
   const zeroY = toY(0, minY, maxY, padT, plotH);
-  const sigArousal = comparisons.filter((c) => c.metric === "arousal");
   const sigStress = comparisons.filter((c) => c.metric === "stress");
 
   return (
@@ -262,14 +262,43 @@ function RoomSummaryChart({ rows, comparisons }: { rows: RoomRow[]; comparisons:
         <text x={22} y={12} fill={PALETTE.text} fontSize="12">Mean arousal</text>
         <rect x={142} y={0} width={14} height={14} fill={STRESS_COLOR} rx={2} />
         <text x={164} y={12} fill={PALETTE.text} fontSize="12">Stress V2</text>
-        <text x={0} y={38} fill={AROUSAL_COLOR} fontSize="11">{differenceLine("Arousal", sigArousal)}</text>
-        <text x={0} y={58} fill={STRESS_COLOR} fontSize="11">{differenceLine("Stress V2", sigStress)}</text>
+        <text x={0} y={44} fill={STRESS_COLOR} fontSize="11">{differenceLine("Stress V2", sigStress)}</text>
       </g>
 
       <text x={CHART_W - padR} y={CHART_H - 18} textAnchor="end" fill={PALETTE.sub} fontSize="10">
         p is an approximate Welch/normal two-sample test over windowed samples.
       </text>
     </svg>
+  );
+}
+
+function ArousalDifferenceTable({ differences }: { differences: PairwiseDifference[] }) {
+  return (
+    <section className="room-summary-table" aria-label="Significant arousal differences">
+      <h2>Arousal differences, p &lt; .05</h2>
+      {differences.length === 0 ? (
+        <p>No room pairs reached p &lt; .05 for arousal.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Room pair</th>
+              <th>p value</th>
+              <th>Cohen's d</th>
+            </tr>
+          </thead>
+          <tbody>
+            {differences.map((difference) => (
+              <tr key={`${difference.left}-${difference.right}-${difference.p}`}>
+                <td>{difference.left} vs {difference.right}</td>
+                <td className="num">{formatP(difference.p)}</td>
+                <td className="num">{formatD(difference.d)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 
