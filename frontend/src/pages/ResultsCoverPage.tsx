@@ -154,6 +154,13 @@ export const ResultsCoverPage: React.FC = () => {
         >
           ↓ PDF
         </a>
+        <Link
+          className="download-btn"
+          to={`/results/${encodeURIComponent(session.session_id)}/room-summary`}
+          aria-label="Open room marker summary chart"
+        >
+          Room summary
+        </Link>
       </div>
 
       <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>

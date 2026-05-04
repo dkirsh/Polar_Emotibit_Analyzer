@@ -74,6 +74,8 @@ export const ChartRenderer: React.FC<Props> = ({ kind, session, width = 720, hei
 
 const EVENT_LETTER_COLOR = "#FFD84D";
 const EVENT_LABEL_BAND = 32;
+const PANEL_TOP_INSET = 24;
+const PANEL_BOTTOM_INSET = 12;
 
 function TimeseriesOverlay({ session, width, height }: { session: StoredSession; width: number; height: number }) {
   const ptsRaw = session.extended?.cleaned_timeseries ?? [];
@@ -115,18 +117,22 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
   const edaMin = Math.min(...eda), edaMax = Math.max(...eda);
   const hrPeak = maxIndex(hr);
   const edaPeak = maxIndex(eda);
-  const padX = 36;
-  const topPad = 42;
-  const panelGap = 44;
-  const bottomPad = 48;
+  const padX = 42;
+  const topPad = 58;
+  const panelGap = 26;
+  const bottomPad = 52;
   const w = width - padX * 2;
   const panelH = Math.max(80, (height - topPad - panelGap - bottomPad) / 2);
   const hrTop = topPad;
   const edaTop = topPad + panelH + panelGap;
   const axisY = Math.min(height - 24, edaTop + panelH);
   const toX = (t: number) => padX + ((t - t0) / (t1 - t0 || 1)) * w;
-  const toYHR = (v: number) => hrTop + ((hrMax - v) / (hrMax - hrMin || 1)) * panelH;
-  const toYEDA = (v: number) => edaTop + ((edaMax - v) / (edaMax - edaMin || 1)) * panelH;
+  const hrPlotH = Math.max(20, panelH - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
+  const edaPlotH = Math.max(20, panelH - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
+  const [hrDomainMin, hrDomainMax] = paddedDomain(hrMin, hrMax, 0.06, 0.14);
+  const [edaDomainMin, edaDomainMax] = paddedDomain(edaMin, edaMax, 0.06, 0.14);
+  const toYHR = (v: number) => hrTop + PANEL_TOP_INSET + ((hrDomainMax - v) / (hrDomainMax - hrDomainMin || 1)) * hrPlotH;
+  const toYEDA = (v: number) => edaTop + PANEL_TOP_INSET + ((edaDomainMax - v) / (edaDomainMax - edaDomainMin || 1)) * edaPlotH;
   const hrPath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${toX(p.timestamp_ms!).toFixed(1)},${toYHR(p.hr_bpm!).toFixed(1)}`).join(" ");
   const edaPath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${toX(p.timestamp_ms!).toFixed(1)},${toYEDA(p.eda_us!).toFixed(1)}`).join(" ");
   return (
@@ -134,16 +140,16 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
 	      <rect width={width} height={height} fill={PALETTE.bg} />
       <EventLinesMs session={session} t0={t0} t1={t1} toX={toX} y1={hrTop} y2={height - 24} width={width} />
 	      {/* HR panel */}
-      <text x={padX} y={18} fill={PALETTE.hr} fontSize="12" fontWeight="600">HR (bpm)</text>
-      <text x={padX} y={33} fill={PALETTE.sub} fontSize="10">{hrMin.toFixed(0)} - {hrMax.toFixed(0)}</text>
+      <text x={padX} y={24} fill={PALETTE.hr} fontSize="12" fontWeight="600">HR (bpm)</text>
+      <text x={padX} y={40} fill={PALETTE.sub} fontSize="10">{hrMin.toFixed(0)} - {hrMax.toFixed(0)}</text>
       <path d={hrPath} stroke={PALETTE.hr} strokeWidth={1.5} fill="none" />
       <circle cx={toX(pts[hrPeak].timestamp_ms!)} cy={toYHR(hrMax)} r={4} fill={PALETTE.hr} stroke={PALETTE.text} strokeWidth={1} />
       <text x={labelX(toX(pts[hrPeak].timestamp_ms!), width, 92)} y={Math.max(14, toYHR(hrMax) - 8)} fill={PALETTE.text} fontSize="10" fontWeight="700">
         peak HR {hrMax.toFixed(0)}
       </text>
       {/* EDA panel */}
-      <text x={padX} y={edaTop - 18} fill={PALETTE.eda} fontSize="12" fontWeight="600">EDA (uS)</text>
-      <text x={padX} y={edaTop - 4} fill={PALETTE.sub} fontSize="10">{edaMin.toFixed(2)} - {edaMax.toFixed(2)}</text>
+      <text x={padX} y={edaTop - 24} fill={PALETTE.eda} fontSize="12" fontWeight="600">EDA (uS)</text>
+      <text x={padX} y={edaTop - 8} fill={PALETTE.sub} fontSize="10">{edaMin.toFixed(2)} - {edaMax.toFixed(2)}</text>
       <path d={edaPath} stroke={PALETTE.eda} strokeWidth={1.5} fill="none" />
       <circle cx={toX(pts[edaPeak].timestamp_ms!)} cy={toYEDA(edaMax)} r={4} fill={PALETTE.eda} stroke={PALETTE.text} strokeWidth={1} />
       <text x={labelX(toX(pts[edaPeak].timestamp_ms!), width, 108)} y={Math.max(edaTop + 12, toYEDA(edaMax) - 8)} fill={PALETTE.text} fontSize="10" fontWeight="700">
@@ -174,11 +180,12 @@ function SingleSeriesChart({
   const vals = pts.map((p) => p[field] as number);
   const vMin = Math.min(...vals), vMax = Math.max(...vals);
   const peak = maxIndex(vals);
-  const pad = 40;
+  const pad = 46;
   const w = width - pad * 2;
   const h = height - pad * 2 - EVENT_LABEL_BAND;
+  const plotH = Math.max(20, h - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
   const toX = (t: number) => pad + ((t - t0) / (t1 - t0 || 1)) * w;
-  const toY = (v: number) => pad + ((vMax - v) / (vMax - vMin || 1)) * h;
+  const toY = (v: number) => pad + PANEL_TOP_INSET + ((vMax - v) / (vMax - vMin || 1)) * plotH;
   const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${toX(p.timestamp_ms!).toFixed(1)},${toY(p[field] as number).toFixed(1)}`).join(" ");
   return (
     <svg width={width} height={height} role="img" aria-label={label}>
@@ -290,13 +297,14 @@ function LineChart({ session, width, height }: { session: StoredSession; width: 
     return null;
   })();
   if (!data) return <Empty msg="Not enough windows for a trajectory" />;
-  const pad = 40;
+  const pad = 46;
   const W = width - pad * 2, H = height - pad * 2 - EVENT_LABEL_BAND;
+  const plotH = Math.max(20, H - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
   const validY = data.y.filter((v) => Number.isFinite(v)) as number[];
   const yMin = Math.min(...validY), yMax = Math.max(...validY);
   const xMin = data.x[0], xMax = data.x[data.x.length - 1];
   const toX = (x: number) => pad + ((x - xMin) / (xMax - xMin || 1)) * W;
-  const toY = (y: number) => pad + ((yMax - y) / (yMax - yMin || 1)) * H;
+  const toY = (y: number) => pad + PANEL_TOP_INSET + ((yMax - y) / (yMax - yMin || 1)) * plotH;
   const segs: string[] = [];
   let current = "";
   for (let i = 0; i < data.x.length; i++) {
@@ -791,11 +799,11 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
   const hasProxy = edrT.length > 2 && edrY.length === edrT.length;
   if (!hasProxy && validRpm.length < 2 && validRsa.length < 2) return <Empty msg="EDR could not be computed (recording too short or too few beats)" />;
 
-  const pad = 40;
+  const pad = 62;
   const W = width - pad * 2;
-  const panelGap = 18;
+  const panelGap = 38;
   const panelCount = hasProxy ? 3 : 2;
-  const proxyNoteGap = hasProxy ? 30 : 0;
+  const proxyNoteGap = hasProxy ? 40 : 0;
   const hPanel = (height - pad * 2 - panelGap * (panelCount - 1) - proxyNoteGap) / panelCount;
   const tMin = hasProxy ? edrT[0] : t[0];
   const tMax = hasProxy ? edrT[edrT.length - 1] : t[t.length - 1];
@@ -806,7 +814,8 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
   const validEdr = hasProxy ? edrY.filter((v): v is number => Number.isFinite(v)) : [];
   const edrMin = validEdr.length > 0 ? Math.min(...validEdr) : -1;
   const edrMax = validEdr.length > 0 ? Math.max(...validEdr) : 1;
-  const toYEdR = (v: number) => edrTop + ((edrMax - v) / (edrMax - edrMin || 1)) * hPanel;
+  const edrPlotH = Math.max(20, hPanel - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
+  const toYEdR = (v: number) => edrTop + PANEL_TOP_INSET + ((edrMax - v) / (edrMax - edrMin || 1)) * edrPlotH;
   const edrSegs: string[] = [];
   if (hasProxy) {
     edrSegs.push(
@@ -818,7 +827,8 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
   const rpmTop = hasProxy ? pad + hPanel + panelGap + proxyNoteGap : pad;
   const rpmMin = validRpm.length > 0 ? Math.min(...validRpm) * 0.9 : 0;
   const rpmMax = validRpm.length > 0 ? Math.max(...validRpm) * 1.1 : 30;
-  const toYRpm = (v: number) => rpmTop + ((rpmMax - v) / (rpmMax - rpmMin || 1)) * hPanel;
+  const rpmPlotH = Math.max(20, hPanel - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
+  const toYRpm = (v: number) => rpmTop + PANEL_TOP_INSET + ((rpmMax - v) / (rpmMax - rpmMin || 1)) * rpmPlotH;
   const rpmSegs: string[] = [];
   let curSeg = "";
   for (let i = 0; i < t.length; i++) {
@@ -832,7 +842,8 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
   const rsaTop = rpmTop + hPanel + panelGap;
   const rsaMin = validRsa.length > 0 ? Math.min(...validRsa) * 0.9 : 0;
   const rsaMax = validRsa.length > 0 ? Math.max(...validRsa) * 1.1 : 30;
-  const toYRsa = (v: number) => rsaTop + ((rsaMax - v) / (rsaMax - rsaMin || 1)) * hPanel;
+  const rsaPlotH = Math.max(20, hPanel - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
+  const toYRsa = (v: number) => rsaTop + PANEL_TOP_INSET + ((rsaMax - v) / (rsaMax - rsaMin || 1)) * rsaPlotH;
   const rsaSegs: string[] = [];
   curSeg = "";
   for (let i = 0; i < t.length; i++) {
@@ -860,8 +871,8 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
         {/* EDR waveform panel */}
       {hasProxy && (
         <>
-          <text x={pad} y={edrTop - 8} fill={PALETTE.text} fontSize="12" fontWeight="600">EDR proxy waveform (RR-derived)</text>
-          <text x={pad + 210} y={edrTop - 8} fill={PALETTE.sub} fontSize="10">
+          <text x={pad} y={edrTop - 24} fill={PALETTE.text} fontSize="12" fontWeight="600">EDR proxy waveform (RR-derived)</text>
+          <text x={pad + 210} y={edrTop - 24} fill={PALETTE.sub} fontSize="10">
             Source: {rrSourceLabel}
           </text>
           {edrSegs.map((path, i) => <path key={`edr-${i}`} d={path} stroke={PALETTE.accent} strokeWidth={1.8} fill="none" />)}
@@ -887,7 +898,7 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
         </>
       )}
 	      {/* RPM panel */}
-      <text x={pad} y={rpmTop - 8} fill={PALETTE.resp} fontSize="12" fontWeight="600">Breathing rate (RPM)</text>
+      <text x={pad} y={rpmTop - 24} fill={PALETTE.resp} fontSize="12" fontWeight="600">Breathing rate (RPM)</text>
       <rect x={pad} y={rpmBandTop} width={W} height={Math.max(0, rpmBandBot - rpmBandTop)} fill={PALETTE.resp} opacity={0.08} />
       <text x={pad + W - 100} y={rpmBandTop + 14} fill={PALETTE.sub} fontSize="10">12–20 RPM normal</text>
       {rpmSegs.map((path, i) => <path key={`rpm-${i}`} d={path} stroke={PALETTE.resp} strokeWidth={2} fill="none" />)}
@@ -895,7 +906,7 @@ function EDRRespiration({ session, width, height }: { session: StoredSession; wi
       <text x={6} y={rpmTop + hPanel} fill={PALETTE.sub} fontSize="10">{rpmMin.toFixed(0)}</text>
       <line x1={pad} y1={rpmTop + hPanel} x2={pad + W} y2={rpmTop + hPanel} stroke={PALETTE.grid} />
       {/* RSA panel */}
-      <text x={pad} y={rsaTop - 8} fill={PALETTE.hr} fontSize="12" fontWeight="600">RSA amplitude (vagal tone proxy)</text>
+      <text x={pad} y={rsaTop - 24} fill={PALETTE.hr} fontSize="12" fontWeight="600">RSA amplitude (vagal tone proxy)</text>
       {rsaSegs.map((path, i) => <path key={`rsa-${i}`} d={path} stroke={PALETTE.hr} strokeWidth={2} fill="none" />)}
       <text x={6} y={rsaTop + 6} fill={PALETTE.sub} fontSize="10">{rsaMax.toFixed(1)}</text>
       <text x={6} y={rsaTop + hPanel} fill={PALETTE.sub} fontSize="10">{rsaMin.toFixed(1)}</text>
@@ -930,12 +941,14 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
         { values: w.rsa_contribution, color: PALETTE.resp, label: "RSA deficit" },
       ];
 
-  const pad = 44;
+  const pad = 58;
   const W = width - pad * 2;
   const H = height - pad * 2 - EVENT_LABEL_BAND;
+  const plotTop = pad + PANEL_TOP_INSET;
+  const plotH = Math.max(20, H - PANEL_TOP_INSET - PANEL_BOTTOM_INSET);
   const tMin = t[0], tMax = t[t.length - 1];
   const toX = (tv: number) => pad + ((tv - tMin) / (tMax - tMin || 1)) * W;
-  const toY = (v: number) => pad + H - (Math.min(v, 1.0) * H);
+  const toY = (v: number) => plotTop + plotH - (Math.min(v, 1.0) * plotH);
 
   // Compute cumulative stacks per time point
   const stacks: number[][] = channels.map(() => new Array(t.length).fill(0));
@@ -963,7 +976,9 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
   const stressLine = t.map((tv, i) => `${i === 0 ? "M" : "L"}${toX(tv).toFixed(1)},${toY(stress[i]).toFixed(1)}`).join(" ");
   const peakIndex = maxIndex(stress);
   const peak = stress[peakIndex] ?? 0;
-  const legendStep = Math.max(84, Math.floor((W - 90) / (channels.length + 1)));
+  const legendCols = 2;
+  const legendColW = Math.max(180, Math.floor(W / legendCols));
+  const legendY = height - 70;
 
   // Reference band boundaries
   const lowY = toY(0.25);
@@ -972,10 +987,10 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
   return (
 	    <svg width={width} height={height} role="img" aria-label="Stress composite trajectory">
 	      <rect width={width} height={height} fill={PALETTE.bg} />
-      <EventLinesSeconds session={session} xMin={tMin} xMax={tMax} toX={toX} y1={pad} y2={pad + H + EVENT_LABEL_BAND - 2} width={width} />
+      <EventLinesSeconds session={session} xMin={tMin} xMax={tMax} toX={toX} y1={plotTop} y2={pad + H + EVENT_LABEL_BAND - 2} width={width} />
 
 	      {/* Reference bands */}
-      <rect x={pad} y={pad} width={W} height={highY - pad} fill={PALETTE.bad} opacity={0.06} />
+      <rect x={pad} y={plotTop} width={W} height={highY - plotTop} fill={PALETTE.bad} opacity={0.06} />
       <rect x={pad} y={lowY} width={W} height={pad + H - lowY} fill={PALETTE.good} opacity={0.06} />
 
       {/* Band labels */}
@@ -1001,17 +1016,17 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
       {/* Legend */}
       {channels.map((ch, i) => (
         <g key={ch.label}>
-          <rect x={pad + i * legendStep} y={height - 18} width={10} height={10} fill={ch.color} opacity={0.7} />
-          <text x={pad + i * legendStep + 14} y={height - 9} fill={PALETTE.sub} fontSize="10">{ch.label}</text>
+          <rect x={pad + (i % legendCols) * legendColW} y={legendY + Math.floor(i / legendCols) * 17} width={10} height={10} fill={ch.color} opacity={0.7} />
+          <text x={pad + (i % legendCols) * legendColW + 14} y={legendY + Math.floor(i / legendCols) * 17 + 9} fill={PALETTE.sub} fontSize="10">{ch.label}</text>
         </g>
       ))}
-      <rect x={pad + channels.length * legendStep} y={height - 18} width={10} height={10} fill={PALETTE.text} opacity={0.7} />
-      <text x={pad + channels.length * legendStep + 14} y={height - 9} fill={PALETTE.sub} fontSize="10">Total</text>
+      <rect x={pad + (channels.length % legendCols) * legendColW} y={legendY + Math.floor(channels.length / legendCols) * 17} width={10} height={10} fill={PALETTE.text} opacity={0.7} />
+      <text x={pad + (channels.length % legendCols) * legendColW + 14} y={legendY + Math.floor(channels.length / legendCols) * 17 + 9} fill={PALETTE.sub} fontSize="10">Total</text>
 
       {/* Axes */}
-      <line x1={pad} y1={pad} x2={pad} y2={pad + H} stroke={PALETTE.grid} />
+      <line x1={pad} y1={plotTop} x2={pad} y2={pad + H} stroke={PALETTE.grid} />
       <line x1={pad} y1={pad + H} x2={pad + W} y2={pad + H} stroke={PALETTE.grid} />
-      <text x={4} y={pad + 6} fill={PALETTE.sub} fontSize="10">1.0</text>
+      <text x={8} y={plotTop + 6} fill={PALETTE.sub} fontSize="10">1.0</text>
       <text x={4} y={toY(0.5) + 4} fill={PALETTE.sub} fontSize="10">0.5</text>
       <text x={4} y={pad + H + 4} fill={PALETTE.sub} fontSize="10">0.0</text>
       <text x={pad} y={pad + H + 14} fill={PALETTE.sub} fontSize="10">{tMin.toFixed(0)} s</text>
@@ -1244,6 +1259,11 @@ function maxIndex(values: number[]): number {
     if (values[i] > values[best]) best = i;
   }
   return best;
+}
+
+function paddedDomain(min: number, max: number, lowFrac = 0.04, highFrac = 0.1): [number, number] {
+  const span = max - min || Math.max(1, Math.abs(max));
+  return [min - span * lowFrac, max + span * highFrac];
 }
 
 function median(values: number[]): number {

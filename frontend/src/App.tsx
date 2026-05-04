@@ -4,6 +4,7 @@ import { StartPage } from "./pages/StartPage";
 import { ResultsCoverPage } from "./pages/ResultsCoverPage";
 import { GroupPage } from "./pages/GroupPage";
 import { AnalyticDetailPage } from "./pages/AnalyticDetailPage";
+import { RoomSummaryPage } from "./pages/RoomSummaryPage";
 
 export const App: React.FC = () => {
   return (
@@ -18,6 +19,7 @@ export const App: React.FC = () => {
       <Routes>
         <Route path="/" element={<StartPage />} />
         <Route path="/results/:sessionId" element={<ResultsCoverPage />} />
+        <Route path="/results/:sessionId/room-summary" element={<RoomSummaryPage />} />
         <Route path="/results/:sessionId/group/:groupId" element={<GroupPage />} />
         <Route path="/results/:sessionId/analytic/:analyticId" element={<AnalyticDetailPage />} />
       </Routes>
