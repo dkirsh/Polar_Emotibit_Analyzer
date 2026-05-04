@@ -8,6 +8,9 @@ Covers the five user-facing endpoints:
 """
 from __future__ import annotations
 
+import csv
+import io
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -139,6 +142,56 @@ def test_analyze_stores_event_marker_timestamps():
     events = detail["markers_summary"]["event_markers"]
     assert events[0]["event_code"] == "recording_start"
     assert events[1]["utc_ms"] == 30000
+
+
+def test_interval_means_csv_export_contains_rows_and_r2_footer():
+    em_bytes, pol_bytes = _synthetic_csvs(180)
+    markers = (
+        b"session_id,event_code,utc_ms,note\n"
+        b"TEST_INTERVAL_EXPORT,baseline_onset,0,baseline starts\n"
+        b"TEST_INTERVAL_EXPORT,baseline_offset,60000,baseline ends\n"
+        b"TEST_INTERVAL_EXPORT,room1_onset,60000,room starts\n"
+        b"TEST_INTERVAL_EXPORT,room1_offset,120000,room ends\n"
+    )
+    r = client.post(
+        "/api/v1/analyze",
+        files={
+            "emotibit_file": ("em.csv", em_bytes, "text/csv"),
+            "polar_file": ("pol.csv", pol_bytes, "text/csv"),
+            "markers_file": ("event_markers.csv", markers, "text/csv"),
+        },
+        data={
+            "session_id": "TEST_INTERVAL_EXPORT",
+            "subject_id": "P01",
+            "study_id": "STUDY01",
+            "session_date": "2026-05-04",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    exported = client.get("/api/v1/sessions/TEST_INTERVAL_EXPORT/export?format=intervals_csv")
+    assert exported.status_code == 200, exported.text
+    assert "TEST_INTERVAL_EXPORT_interval_means.csv" in exported.headers["content-disposition"]
+
+    rows = list(csv.reader(io.StringIO(exported.text)))
+    assert rows[0][:12] == [
+        "Key",
+        "Interval",
+        "Seconds",
+        "Arousal",
+        "Main Driver",
+        "Hr Mean",
+        "HR SD",
+        "EDA mean",
+        "Stress V2",
+        "Resp Rate",
+        "RMSSD",
+        "RSA Amp",
+    ]
+    assert rows[1][0:3] == ["A", "Baseline", "0.0-60.0"]
+    assert rows[2][0:3] == ["B", "Room 1", "60.0-120.0"]
+    assert any(row[:1] == ["Equation"] and "SS_res" in row[1] for row in rows)
+    assert any(row[:1] == ["Meaning"] and "fraction of outcome variance" in row[1] for row in rows)
 
 
 def test_validate_emotibit_csv_rejects_missing_columns():

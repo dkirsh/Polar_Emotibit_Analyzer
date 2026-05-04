@@ -34,7 +34,7 @@ export type FeatureSummary = {
 };
 
 // Report-export formats (GET /api/v1/sessions/{id}/export?format=...)
-export type ExportFormat = "csv" | "xlsx" | "mat" | "pdf";
+export type ExportFormat = "csv" | "intervals_csv" | "xlsx" | "mat" | "pdf";
 
 /** URL for downloading a stored session in one of the four formats. */
 export function sessionExportUrl(sessionId: string, format: ExportFormat): string {

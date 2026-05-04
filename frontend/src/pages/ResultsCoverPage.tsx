@@ -124,6 +124,14 @@ export const ResultsCoverPage: React.FC = () => {
         </a>
         <a
           className="download-btn"
+          href={sessionExportUrl(session.session_id, "intervals_csv")}
+          download={`${session.session_id}_interval_means.csv`}
+          aria-label="Download interval means as CSV"
+        >
+          ↓ Interval CSV
+        </a>
+        <a
+          className="download-btn"
           href={sessionExportUrl(session.session_id, "xlsx")}
           download={`${session.session_id}.xlsx`}
           aria-label="Download analysis as Excel workbook"

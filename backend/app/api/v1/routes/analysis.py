@@ -774,9 +774,9 @@ def get_session(session_id: str) -> SessionDetail:
 def export_session(session_id: str, format: str = "csv") -> Response:
     """Export a stored session in one of four Kubios-parity formats.
 
-    Supported formats: csv, xlsx (Excel), mat (MATLAB), pdf.
+    Supported formats: csv, intervals_csv, xlsx (Excel), mat (MATLAB), pdf.
     """
-    from app.services.reporting.exporters import EXPORTERS, MIME_TYPES
+    from app.services.reporting.exporters import EXPORTERS, MIME_TYPES, export_interval_means_to_csv
 
     if session_id not in _SESSION_STORE:
         raise HTTPException(
@@ -791,6 +791,15 @@ def export_session(session_id: str, format: str = "csv") -> Response:
         )
 
     record = _SESSION_STORE[session_id]
+    if fmt == "intervals_csv":
+        payload = export_interval_means_to_csv(record)
+        filename = f"{session_id}_interval_means.csv"
+        return Response(
+            content=payload,
+            media_type=MIME_TYPES[fmt],
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     # The stored result is already AnalysisResponse-shaped; rehydrate.
     analysis = AnalysisResponse(**record["result"])
     exporter = EXPORTERS[fmt]

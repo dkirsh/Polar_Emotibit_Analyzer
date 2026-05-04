@@ -124,6 +124,212 @@ def export_to_csv(analysis: AnalysisResponse) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
+def export_interval_means_to_csv(session_record: dict[str, Any]) -> bytes:
+    """Downloadable interval-means CSV for event-marker bounded phases."""
+    intervals = _session_event_intervals(session_record)
+    extended = session_record.get("extended") or {}
+    windowed = extended.get("windowed") or {}
+    timeseries = extended.get("cleaned_timeseries") or []
+    origin_ms = _session_time_origin_ms(timeseries)
+
+    headers = [
+        "Key",
+        "Interval",
+        "Seconds",
+        "Arousal",
+        "Main Driver",
+        "Hr Mean",
+        "HR SD",
+        "EDA mean",
+        "Stress V2",
+        "Resp Rate",
+        "RMSSD",
+        "RSA Amp",
+        "Stress V1",
+        "HR Contribution",
+        "EDA Tonic Contribution",
+        "EDA Phasic Contribution",
+        "Vagal Contribution",
+        "LF_nu Contribution",
+        "Rigidity Contribution",
+        "RSA Contribution",
+        "Window Count",
+        "Sample Count",
+        "Onset ms",
+        "Offset ms",
+    ]
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(headers)
+
+    for interval in intervals:
+        onset_ms = float(interval["onset_ms"])
+        offset_ms = float(interval["offset_ms"])
+        points = [
+            point for point in timeseries
+            if _is_finite_number(point.get("timestamp_ms"))
+            and onset_ms <= float(point["timestamp_ms"]) <= offset_ms
+        ]
+        if origin_ms is None:
+            onset_s = onset_ms / 1000.0
+            offset_s = offset_ms / 1000.0
+        else:
+            onset_s = (onset_ms - origin_ms) / 1000.0
+            offset_s = (offset_ms - origin_ms) / 1000.0
+
+        window_indexes = [
+            i for i, t in enumerate(windowed.get("t_s") or [])
+            if _is_finite_number(t) and onset_s <= float(t) <= offset_s
+        ]
+        driver = _dominant_driver_label(windowed, window_indexes)
+        writer.writerow(
+            [
+                interval["letter"],
+                interval["label"],
+                f"{onset_s:.1f}-{offset_s:.1f}",
+                _fmt(_mean(_window_values(windowed, "arousal_index", window_indexes)), 3),
+                driver,
+                _fmt(_mean([point.get("hr_bpm") for point in points]), 1),
+                _fmt(_sample_sd([point.get("hr_bpm") for point in points]), 1),
+                _fmt(_mean([point.get("eda_us") for point in points]), 2),
+                _fmt(_mean(_window_values(windowed, "stress_v2", window_indexes)), 3),
+                _fmt(_mean(_window_values(windowed, "mean_rpm", window_indexes)), 1),
+                _fmt(_mean(_window_values(windowed, "rmssd", window_indexes)), 1),
+                _fmt(_mean(_window_values(windowed, "rsa_amplitude", window_indexes)), 1),
+                _fmt(_mean(_window_values(windowed, "stress", window_indexes)), 3),
+                _fmt(_mean(_window_values(windowed, "v2_hr_contribution", window_indexes)), 3),
+                _fmt(_mean(_window_values(windowed, "v2_eda_contribution", window_indexes)), 3),
+                _fmt(_mean(_window_values(windowed, "v2_phasic_contribution", window_indexes)), 3),
+                _fmt(_mean(_window_values(windowed, "v2_vagal_contribution", window_indexes)), 3),
+                _fmt(_mean(_window_values(windowed, "v2_sympathovagal_contribution", window_indexes)), 3),
+                _fmt(_mean(_window_values(windowed, "v2_rigidity_contribution", window_indexes)), 3),
+                _fmt(_mean(_window_values(windowed, "v2_rsa_contribution", window_indexes)), 3),
+                len(window_indexes),
+                len(points),
+                int(onset_ms),
+                int(offset_ms),
+            ]
+        )
+
+    writer.writerow([])
+    writer.writerow(["Equation", "R2 = 1 - SS_res / SS_tot = 1 - sum((y_i - yhat_i)^2) / sum((y_i - ybar)^2)"])
+    writer.writerow(
+        [
+            "Meaning",
+            "R2 is the fraction of outcome variance explained by a model. "
+            "R2 = 1 means perfect prediction; R2 = 0 means the model is no better than predicting the sample mean.",
+        ]
+    )
+    return buf.getvalue().encode("utf-8")
+
+
+def _session_event_intervals(session_record: dict[str, Any]) -> list[dict[str, Any]]:
+    markers = ((session_record.get("markers_summary") or {}).get("event_markers") or [])[:52]
+    by_key: dict[str, dict[str, Any]] = {}
+    for marker in markers:
+        code = str(marker.get("event_code") or "")
+        try:
+            utc_ms = int(marker.get("utc_ms"))
+        except (TypeError, ValueError):
+            continue
+        if code.endswith("_onset"):
+            key = code[:-6]
+            by_key.setdefault(key, {"key": key})["onset_ms"] = utc_ms
+        elif code.endswith("_offset"):
+            key = code[:-7]
+            by_key.setdefault(key, {"key": key})["offset_ms"] = utc_ms
+
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    intervals: list[dict[str, Any]] = []
+    complete = [
+        interval for interval in by_key.values()
+        if "onset_ms" in interval and "offset_ms" in interval
+    ]
+    for index, interval in enumerate(sorted(complete, key=lambda row: row["onset_ms"])):
+        key = str(interval["key"])
+        intervals.append(
+            {
+                "key": key,
+                "letter": letters[index] if index < len(letters) else str(index + 1),
+                "label": _interval_label(key),
+                "onset_ms": interval["onset_ms"],
+                "offset_ms": interval["offset_ms"],
+            }
+        )
+    return intervals
+
+
+def _interval_label(key: str) -> str:
+    if key.lower() == "baseline":
+        return "Baseline"
+    if key.lower().startswith("room") and key[4:].isdigit():
+        return f"Room {key[4:]}"
+    return " ".join(part.capitalize() for part in key.replace("-", "_").split("_") if part)
+
+
+def _session_time_origin_ms(timeseries: list[dict[str, Any]]) -> float | None:
+    for point in timeseries:
+        value = point.get("timestamp_ms")
+        if _is_finite_number(value):
+            return float(value)
+    return None
+
+
+def _window_values(windowed: dict[str, Any], key: str, indexes: list[int]) -> list[Any]:
+    values = windowed.get(key) or []
+    return [values[i] for i in indexes if i < len(values)]
+
+
+def _dominant_driver_label(windowed: dict[str, Any], indexes: list[int]) -> str:
+    specs = [
+        ("HR", "v2_hr_contribution"),
+        ("EDA tonic", "v2_eda_contribution"),
+        ("EDA phasic", "v2_phasic_contribution"),
+        ("vagal deficit", "v2_vagal_contribution"),
+        ("LF_nu", "v2_sympathovagal_contribution"),
+        ("rigidity", "v2_rigidity_contribution"),
+        ("RSA", "v2_rsa_contribution"),
+    ]
+    means = [
+        (label, mean)
+        for label, key in specs
+        if (mean := _mean(_window_values(windowed, key, indexes))) is not None
+    ]
+    if not means:
+        return "mixed"
+    return max(means, key=lambda row: row[1])[0]
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and value == value and value not in (float("inf"), float("-inf"))
+
+
+def _numeric_values(values: list[Any]) -> list[float]:
+    return [float(value) for value in values if _is_finite_number(value)]
+
+
+def _mean(values: list[Any]) -> float | None:
+    ys = _numeric_values(values)
+    if not ys:
+        return None
+    return sum(ys) / len(ys)
+
+
+def _sample_sd(values: list[Any]) -> float | None:
+    ys = _numeric_values(values)
+    if not ys:
+        return None
+    if len(ys) == 1:
+        return 0.0
+    mean = sum(ys) / len(ys)
+    return (sum((y - mean) ** 2 for y in ys) / (len(ys) - 1)) ** 0.5
+
+
+def _fmt(value: float | None, digits: int) -> str:
+    return "" if value is None else f"{value:.{digits}f}"
+
+
 # ---------------------------------------------------------------------------
 # XLSX (multi-sheet workbook)
 # ---------------------------------------------------------------------------
@@ -279,18 +485,21 @@ def export_to_mat(analysis: AnalysisResponse) -> bytes:
 
 def export_to_pdf(analysis: AnalysisResponse, *, session_id: str | None = None) -> bytes:
     """Formatted one-to-two-page PDF report, paper-appendix style."""
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import LETTER
-    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    from reportlab.lib.units import inch
-    from reportlab.platypus import (
-        PageBreak,
-        Paragraph,
-        SimpleDocTemplate,
-        Spacer,
-        Table,
-        TableStyle,
-    )
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import LETTER
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import (
+            PageBreak,
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+    except ModuleNotFoundError:
+        return _minimal_pdf_export(analysis, session_id=session_id)
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -378,6 +587,61 @@ def export_to_pdf(analysis: AnalysisResponse, *, session_id: str | None = None) 
     return buf.getvalue()
 
 
+def _minimal_pdf_export(analysis: AnalysisResponse, *, session_id: str | None = None) -> bytes:
+    """Small valid PDF fallback for environments missing reportlab."""
+    fs = analysis.feature_summary
+    lines = [
+        "Polar-EmotiBit HRV report",
+        f"session_id = {session_id or ''}",
+        f"Mean HR: {fs.mean_hr_bpm:.3f} bpm",
+        f"RMSSD: {fs.rmssd_ms:.3f} ms",
+        f"SDNN: {fs.sdnn_ms:.3f} ms",
+        f"EDA mean: {fs.eda_mean_us:.3f} uS",
+        f"Stress v2: {fs.stress_score_v2 if fs.stress_score_v2 is not None else ''}",
+        f"Sync QC: {analysis.sync_qc_band} ({analysis.sync_qc_score:.1f}/100)",
+        "Non-diagnostic notice:",
+        analysis.non_diagnostic_notice,
+        "Quality flags:",
+        *analysis.quality_flags,
+    ]
+    text_ops = ["BT", "/F1 10 Tf", "72 740 Td", "14 TL"]
+    for i, line in enumerate(lines):
+        escaped = str(line).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        if i == 0:
+            text_ops.append(f"({escaped}) Tj")
+        else:
+            text_ops.append(f"T* ({escaped}) Tj")
+    text_ops.append("ET")
+    stream = "\n".join(text_ops).encode("latin-1", errors="replace")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    out = io.BytesIO()
+    out.write(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj_num, obj in enumerate(objects, start=1):
+        offsets.append(out.tell())
+        out.write(f"{obj_num} 0 obj\n".encode("ascii"))
+        out.write(obj)
+        out.write(b"\nendobj\n")
+    xref_at = out.tell()
+    out.write(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    out.write(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        out.write(f"{offset:010d} 00000 n \n".encode("ascii"))
+    out.write(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n".encode("ascii")
+    )
+    payload = out.getvalue()
+    if len(payload) < 1001:
+        payload += b"%" + (b" fallback padding" * ((1001 - len(payload)) // 17 + 1))
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -385,6 +649,7 @@ def export_to_pdf(analysis: AnalysisResponse, *, session_id: str | None = None) 
 
 MIME_TYPES: dict[str, str] = {
     "csv": "text/csv",
+    "intervals_csv": "text/csv",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "mat": "application/x-matlab-data",
     "pdf": "application/pdf",
@@ -392,6 +657,7 @@ MIME_TYPES: dict[str, str] = {
 
 EXPORTERS: dict[str, Any] = {
     "csv": export_to_csv,
+    "intervals_csv": export_interval_means_to_csv,
     "xlsx": export_to_xlsx,
     "mat": export_to_mat,
     "pdf": export_to_pdf,
