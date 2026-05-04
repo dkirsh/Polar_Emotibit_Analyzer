@@ -30,6 +30,7 @@ type PairwiseDifference = {
 
 const CHART_W = 1120;
 const CHART_H = 640;
+const AROUSAL_ONLY_CHART_H = 470;
 const AROUSAL_COLOR = "#00C896";
 const STRESS_COLOR = "#E8872A";
 
@@ -77,6 +78,9 @@ export const RoomSummaryPage: React.FC = () => {
 
       <div className="chart-frame large">
         <RoomSummaryChart rows={rows} comparisons={comparisons} />
+      </div>
+      <div className="chart-frame large room-summary-chart-spacer">
+        <RankedArousalChart rows={rows} />
       </div>
       <ArousalDifferenceTable differences={comparisons.filter((c) => c.metric === "arousal")} />
     </main>
@@ -272,6 +276,72 @@ function RoomSummaryChart({ rows, comparisons }: { rows: RoomRow[]; comparisons:
   );
 }
 
+function RankedArousalChart({ rows }: { rows: RoomRow[] }) {
+  const ranked = rows
+    .filter((row) => row.arousal.mean !== null)
+    .sort((a, b) => (a.arousal.mean ?? Infinity) - (b.arousal.mean ?? Infinity));
+
+  if (ranked.length === 0) return <div style={{ color: PALETTE.sub }}>No room-marker arousal data available.</div>;
+
+  const padL = 78;
+  const padR = 38;
+  const padT = 78;
+  const padB = 92;
+  const plotW = CHART_W - padL - padR;
+  const plotH = AROUSAL_ONLY_CHART_H - padT - padB;
+  const values = ranked.map((row) => row.arousal.mean ?? 0);
+  const maxAbs = Math.max(0.05, ...values.map((value) => Math.abs(value))) * 1.16;
+  const roomW = plotW / ranked.length;
+  const barW = Math.max(24, Math.min(58, roomW * 0.48));
+  const zeroY = arousalY(0, maxAbs, padT, plotH);
+  const ticks = [-maxAbs, -maxAbs / 2, 0, maxAbs / 2, maxAbs];
+
+  return (
+    <svg width={CHART_W} height={AROUSAL_ONLY_CHART_H} role="img" aria-label="Ranked arousal by room, negative plotted upward">
+      <rect width={CHART_W} height={AROUSAL_ONLY_CHART_H} fill={PALETTE.bg} />
+      <text x={padL} y={30} fill={PALETTE.text} fontSize="18" fontWeight="700">Arousal by room, ranked high to low on plot</text>
+      <text x={padL} y={52} fill={PALETTE.sub} fontSize="12">ERP-style polarity: negative values plot upward; labels keep the signed arousal value.</text>
+
+      {ticks.map((tick) => {
+        const y = arousalY(tick, maxAbs, padT, plotH);
+        return (
+          <g key={tick.toFixed(4)}>
+            <line x1={padL} y1={y} x2={CHART_W - padR} y2={y} stroke={tick === 0 ? "#808080" : PALETTE.grid} strokeWidth={tick === 0 ? 1.2 : 1} />
+            <text x={padL - 14} y={y + 4} textAnchor="end" fill={PALETTE.sub} fontSize="10">{tick.toFixed(2)}</text>
+          </g>
+        );
+      })}
+
+      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={PALETTE.grid} />
+      <line x1={padL} y1={zeroY} x2={CHART_W - padR} y2={zeroY} stroke="#8A8A8A" strokeWidth={1.2} />
+
+      {ranked.map((row, index) => {
+        const mean = row.arousal.mean ?? 0;
+        const cx = padL + roomW * index + roomW / 2;
+        const y = arousalY(mean, maxAbs, padT, plotH);
+        const top = Math.min(y, zeroY);
+        const barH = Math.max(2, Math.abs(zeroY - y));
+        const rank = index + 1;
+        return (
+          <g key={row.interval.key}>
+            <rect x={cx - barW / 2} y={top} width={barW} height={barH} rx={4} fill={AROUSAL_COLOR} opacity={0.94} />
+            <text x={cx} y={top - 8} textAnchor="middle" fill={AROUSAL_COLOR} fontSize="11" fontWeight="700">
+              {mean.toFixed(3)}
+            </text>
+            <text x={cx} y={padT + plotH + 26} textAnchor="middle" fill={PALETTE.text} fontSize="12" fontWeight="800">{rank}</text>
+            <text x={cx} y={padT + plotH + 44} textAnchor="middle" fill={PALETTE.text} fontSize="11" fontWeight="700">{row.interval.label}</text>
+            <text x={cx} y={padT + plotH + 61} textAnchor="middle" fill={PALETTE.sub} fontSize="10">{row.interval.letter} · {row.seconds.toFixed(0)} s</text>
+          </g>
+        );
+      })}
+
+      <text x={CHART_W - padR} y={AROUSAL_ONLY_CHART_H - 20} textAnchor="end" fill={PALETTE.sub} fontSize="10">
+        Rank 1 is highest on the plot after ERP-style negative-up polarity.
+      </text>
+    </svg>
+  );
+}
+
 function ArousalDifferenceTable({ differences }: { differences: PairwiseDifference[] }) {
   return (
     <section className="room-summary-table" aria-label="Significant arousal differences">
@@ -315,6 +385,10 @@ function barGeometry(value: number | null, x: number, w: number, minY: number, m
 
 function toY(value: number, minY: number, maxY: number, padT: number, plotH: number): number {
   return padT + ((maxY - value) / (maxY - minY || 1)) * plotH;
+}
+
+function arousalY(value: number, maxAbs: number, padT: number, plotH: number): number {
+  return padT + ((value + maxAbs) / (maxAbs * 2 || 1)) * plotH;
 }
 
 function shortLabel(label: string): string {

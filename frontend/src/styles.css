@@ -357,6 +357,10 @@ a:hover { text-decoration: underline; }
   padding: 20px 16px 24px;
 }
 
+.room-summary-chart-spacer {
+  margin-top: 14px;
+}
+
 .chart-frame svg {
   display: block;
   width: auto;
