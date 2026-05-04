@@ -295,12 +295,18 @@ function RankedArousalChart({ rows }: { rows: RoomRow[] }) {
   const barW = Math.max(24, Math.min(58, roomW * 0.48));
   const zeroY = arousalY(0, maxAbs, padT, plotH);
   const ticks = [-maxAbs, -maxAbs / 2, 0, maxAbs / 2, maxAbs];
+  const significantNeighbors = ranked.slice(0, -1).map((row, index) => ({
+    left: row,
+    right: ranked[index + 1],
+    index,
+    ...compareMetrics(row.arousal, ranked[index + 1].arousal),
+  })).filter((comparison) => comparison.p !== null && comparison.p < 0.05);
 
   return (
     <svg width={CHART_W} height={AROUSAL_ONLY_CHART_H} role="img" aria-label="Ranked arousal by room, negative plotted upward">
       <rect width={CHART_W} height={AROUSAL_ONLY_CHART_H} fill={PALETTE.bg} />
       <text x={padL} y={30} fill={PALETTE.text} fontSize="18" fontWeight="700">Arousal by room, ranked high to low on plot</text>
-      <text x={padL} y={52} fill={PALETTE.sub} fontSize="12">ERP-style polarity: negative values plot upward; labels keep the signed arousal value.</text>
+      <text x={padL} y={52} fill={PALETTE.sub} fontSize="12">ERP-style polarity: negative values plot upward; brackets show significant neighboring-room differences.</text>
 
       {ticks.map((tick) => {
         const y = arousalY(tick, maxAbs, padT, plotH);
@@ -331,6 +337,27 @@ function RankedArousalChart({ rows }: { rows: RoomRow[] }) {
             <text x={cx} y={padT + plotH + 26} textAnchor="middle" fill={PALETTE.text} fontSize="12" fontWeight="800">{rank}</text>
             <text x={cx} y={padT + plotH + 44} textAnchor="middle" fill={PALETTE.text} fontSize="11" fontWeight="700">{row.interval.label}</text>
             <text x={cx} y={padT + plotH + 61} textAnchor="middle" fill={PALETTE.sub} fontSize="10">{row.interval.letter} · {row.seconds.toFixed(0)} s</text>
+          </g>
+        );
+      })}
+
+      {significantNeighbors.map((comparison, bracketIndex) => {
+        const x1 = padL + roomW * comparison.index + roomW / 2;
+        const x2 = padL + roomW * (comparison.index + 1) + roomW / 2;
+        const y1 = arousalY(comparison.left.arousal.mean ?? 0, maxAbs, padT, plotH);
+        const y2 = arousalY(comparison.right.arousal.mean ?? 0, maxAbs, padT, plotH);
+        const y = Math.max(padT + 6, Math.min(y1, y2) - 24 - (bracketIndex % 2) * 18);
+        return (
+          <g key={`${comparison.left.interval.key}-${comparison.right.interval.key}`}>
+            <path
+              d={`M${x1.toFixed(1)},${(y + 8).toFixed(1)} L${x1.toFixed(1)},${y.toFixed(1)} L${x2.toFixed(1)},${y.toFixed(1)} L${x2.toFixed(1)},${(y + 8).toFixed(1)}`}
+              fill="none"
+              stroke={PALETTE.text}
+              strokeWidth={1.2}
+            />
+            <text x={(x1 + x2) / 2} y={y - 5} textAnchor="middle" fill={PALETTE.text} fontSize="10" fontWeight="700">
+              p={formatP(comparison.p)}
+            </text>
           </g>
         );
       })}
