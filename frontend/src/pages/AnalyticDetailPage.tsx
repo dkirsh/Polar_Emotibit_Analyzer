@@ -61,8 +61,17 @@ export const AnalyticDetailPage: React.FC = () => {
   const scienceCaption = captionsForAnalytic(a, session);
   const respirationSource = session.extended?.edr_proxy?.rr_source ?? session.result.feature_summary.rr_source;
   const respirationSourceNote = session.extended?.edr_proxy?.rr_source_note ?? session.result.feature_summary.rr_source_note;
-  const standardChartHeight = a.chartKind === "edr_respiration" ? 560 : 430;
-  const largeChartHeight = a.chartKind === "edr_respiration" ? 760 : 620;
+  const standardChartHeight = a.chartKind === "edr_respiration"
+    ? 560
+    : a.chartKind === "timeseries_overlay"
+      ? 620
+      : 430;
+  const largeChartHeight = a.chartKind === "edr_respiration"
+    ? 760
+    : a.chartKind === "timeseries_overlay"
+      ? 820
+      : 620;
+  const fullWidthChartLayout = largeChart || a.chartKind === "timeseries_overlay";
   const downloadSvg = () => {
     const svg = document.querySelector<SVGSVGElement>("#chart-frame svg");
     if (!svg) return;
@@ -160,8 +169,8 @@ export const AnalyticDetailPage: React.FC = () => {
           Download chart SVG
         </button>
       </div>
-      <div className={largeChart ? "chart-with-event-key large" : "chart-with-event-key"}>
-        <div id="chart-frame" className={largeChart ? "chart-frame large" : "chart-frame"}>
+      <div className={fullWidthChartLayout ? "chart-with-event-key large" : "chart-with-event-key"}>
+        <div id="chart-frame" className={fullWidthChartLayout ? "chart-frame large" : "chart-frame"}>
           <ChartRenderer
             kind={a.chartKind}
             session={session}
