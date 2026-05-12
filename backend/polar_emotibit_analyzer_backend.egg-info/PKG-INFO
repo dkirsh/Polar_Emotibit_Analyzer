@@ -1,0 +1,54 @@
+Metadata-Version: 2.4
+Name: polar-emotibit-analyzer-backend
+Version: 2.1.0
+Summary: File-only post-hoc analyzer for pre-synched Polar H10 + EmotiBit sessions.
+Author-email: COGS 160 Lab <dkirsh@ucsd.edu>
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.26
+Requires-Dist: pandas>=2.1
+Requires-Dist: scipy>=1.11
+Requires-Dist: pydantic>=2.5
+Requires-Dist: fastapi>=0.109
+Requires-Dist: uvicorn[standard]>=0.27
+Requires-Dist: python-multipart>=0.0.9
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: openpyxl>=3.1
+Requires-Dist: reportlab>=4.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: httpx>=0.26; extra == "dev"
+Requires-Dist: ruff>=0.1; extra == "dev"
+
+# Polar-EmotiBit Analyzer Backend
+
+FastAPI backend for the Polar-EmotiBit Analyzer.
+
+The full user guide is in the repository root `README.md`. This local
+README exists so Python packaging tools can install the backend from the
+`backend/` directory without trying to read files outside the package
+root.
+
+## Install
+
+From the repository root:
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e ".[dev]"
+python -m pytest -q
+```
+
+## Run
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+The frontend development server proxies `/api` requests to this backend.

@@ -284,3 +284,17 @@ class StatisticalTimelineResponse(BaseModel):
     sync_qc_band: str = "unknown"
     sync_qc_gate: str = "unknown"
     sync_qc_failure_reasons: list[str] = []
+
+
+class EventMarker(BaseModel):
+    """An individual event marker."""
+
+    event_code: str
+    utc_ms: int
+    note: str | None = None
+
+
+class MarkerUpdateRequest(BaseModel):
+    """Request payload for updating session markers dynamically."""
+
+    markers: list[EventMarker]

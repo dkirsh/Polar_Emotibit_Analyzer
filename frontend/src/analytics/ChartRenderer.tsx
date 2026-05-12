@@ -12,7 +12,7 @@ import React from "react";
 import { ChartKind } from "./catalog";
 import { StoredSession } from "../api";
 import { PALETTE } from "./chartPalette";
-import { eventLetter, sessionEventIntervals, sessionEvents } from "./eventIntervals";
+import { eventLetter, sessionEventIntervals, chartEventIntervals, sessionEvents } from "./eventIntervals";
 import { safe } from "./util";
 
 type Props = {
@@ -1198,7 +1198,7 @@ function intervalArousalRows(session: StoredSession): Array<{
   stressV2: number;
   driver: string;
 }> {
-  const intervals = sessionEventIntervals(session);
+  const intervals = chartEventIntervals(session);
   const windowed = session.extended?.windowed;
   if (!windowed || intervals.length === 0) return [];
   const origin = sessionTimeOriginMs(session);

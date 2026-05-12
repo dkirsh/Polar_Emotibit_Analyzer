@@ -20,6 +20,12 @@ export function sessionEvents(session: StoredSession): EventMarker[] {
     .slice(0, 52);
 }
 
+export function chartEventIntervals(session: StoredSession): EventInterval[] {
+  return sessionEventIntervals(session).filter(
+    (i) => !i.key.includes("_analysis") && !i.key.includes("_epoch")
+  );
+}
+
 export function sessionEventIntervals(session: StoredSession): EventInterval[] {
   const byKey = new Map<string, Partial<EventInterval>>();
   for (const event of sessionEvents(session)) {

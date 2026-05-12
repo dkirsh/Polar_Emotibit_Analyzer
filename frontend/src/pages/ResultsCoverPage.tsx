@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getSession, sessionExportUrl, StoredSession } from "../api";
 import { GROUP_META, analyticsByGroup } from "../analytics/catalog";
+import { MarkerEditor } from "../components/MarkerEditor";
 
 /**
  * Results cover page — the landing for a completed analysis.
@@ -94,6 +95,8 @@ export const ResultsCoverPage: React.FC = () => {
       <div className="notice" style={{ marginTop: 18 }} role="note">
         <b>Non-diagnostic notice.</b> {r.non_diagnostic_notice}
       </div>
+
+      <MarkerEditor session={session} onUpdated={setSession} />
 
       {/* Download row — JSON + four Kubios-parity report formats.
           The four format buttons link to the server-side export endpoint

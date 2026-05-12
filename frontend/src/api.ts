@@ -336,5 +336,20 @@ export async function getSession(sessionId: string): Promise<StoredSession> {
   return (await r.json()) as StoredSession;
 }
 
+export async function updateMarkers(sessionId: string, markers: Array<{ event_code: string; utc_ms: number; note?: string }>): Promise<StoredSession> {
+  const r = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/markers`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ markers }),
+  });
+  if (!r.ok) {
+    const detail = await readError(r);
+    throw new Error(`Failed to update markers: ${detail}`);
+  }
+  return (await r.json()) as StoredSession;
+}
+
 // Re-export to avoid unused-import warnings when consumers only need one.
 export type { ValidateResponse };

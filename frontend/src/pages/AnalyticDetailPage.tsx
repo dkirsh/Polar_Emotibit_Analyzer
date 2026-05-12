@@ -10,7 +10,7 @@ import {
   getAnalytic,
 } from "../analytics/catalog";
 import { ChartRenderer } from "../analytics/ChartRenderer";
-import { EventInterval, sessionEventIntervals } from "../analytics/eventIntervals";
+import { EventInterval, sessionEventIntervals, chartEventIntervals } from "../analytics/eventIntervals";
 import { annotateGlossaryTerms } from "../analytics/util";
 
 /**
@@ -341,7 +341,7 @@ const TIME_ALIGNED_CHARTS: ChartKind[] = [
 ];
 
 function EventMarkerApplicabilityNote({ analytic, session }: { analytic: AnalyticEntry; session: StoredSession }) {
-  const intervals = sessionEventIntervals(session);
+  const intervals = chartEventIntervals(session);
   if (intervals.length === 0 || TIME_ALIGNED_CHARTS.includes(analytic.chartKind)) return null;
   const reason = markerReason(analytic.chartKind);
   return (
@@ -374,7 +374,7 @@ function markerReason(kind: ChartKind): string {
 }
 
 function EventIntervalLegend({ session }: { session: StoredSession }) {
-  const intervals = sessionEventIntervals(session);
+  const intervals = chartEventIntervals(session);
   if (intervals.length === 0) return null;
   return (
     <aside className="event-legend" aria-label="Room letter legend">

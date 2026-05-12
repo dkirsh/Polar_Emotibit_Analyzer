@@ -26,6 +26,7 @@ from app.schemas.analysis import (
     FeatureSummary,
     SessionDetail,
     SessionSummary,
+    MarkerUpdateRequest,
 )
 from app.services.ingestion.parsers import parse_emotibit_csv, parse_polar_csv
 from app.services.processing.benchmark import bland_altman
@@ -767,6 +768,50 @@ def get_session(session_id: str) -> SessionDetail:
             detail=f"No session found for session_id={session_id!r}",
         )
     record = _SESSION_STORE[session_id]
+    return SessionDetail(**record)
+
+
+@router.put("/sessions/{session_id}/markers", response_model=SessionDetail)
+def update_session_markers(session_id: str, request: MarkerUpdateRequest) -> SessionDetail:
+    """Update event markers for a stored session and recompute baseline arousal."""
+    _migrate_stored_sessions()
+    if session_id not in _SESSION_STORE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No session found for session_id={session_id!r}",
+        )
+    record = _SESSION_STORE[session_id]
+    
+    # Update markers summary
+    markers = [m.model_dump() if hasattr(m, "model_dump") else m.dict() for m in request.markers]
+    codes = sorted({str(m.get("event_code", "")) for m in markers})
+    record["markers_summary"] = {
+        "n_rows": len(markers),
+        "codes": codes,
+        "event_markers": markers,
+    }
+
+    # Recompute arousal_baseline and arousal_index if extended data exists
+    extended = record.get("extended")
+    if isinstance(extended, dict) and isinstance(extended.get("windowed"), dict):
+        windowed = extended["windowed"]
+        cleaned_ts = extended.get("cleaned_timeseries") or []
+        if cleaned_ts and windowed.get("t_s") and windowed.get("stress_v2"):
+            import pandas as pd
+            df = pd.DataFrame(cleaned_ts)
+            new_baseline = _baseline_window_stress_v2(
+                record["markers_summary"],
+                df,
+                windowed["t_s"],
+                windowed["stress_v2"]
+            )
+            windowed["arousal_baseline"] = new_baseline
+            windowed["arousal_index"] = [
+                rescale_stress_v2_to_arousal_index(score, new_baseline)
+                for score in windowed["stress_v2"]
+            ]
+
+    _persist_store()
     return SessionDetail(**record)
 
 

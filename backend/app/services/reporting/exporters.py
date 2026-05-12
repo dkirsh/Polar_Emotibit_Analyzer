@@ -20,7 +20,18 @@ import io
 from datetime import datetime
 from typing import Any
 
+import pandas as pd
+import numpy as np
+
 from app.schemas.analysis import AnalysisResponse
+from app.services.processing.features import (
+    compute_time_domain_features,
+    compute_poincare_features,
+    compute_hrv_frequency_features,
+    compute_edr
+)
+from app.services.processing.stress import compute_stress_score_v2
+from app.services.processing.extended_analytics import decompose_stress
 
 
 # ---------------------------------------------------------------------------
@@ -178,33 +189,101 @@ def export_interval_means_to_csv(session_record: dict[str, Any]) -> bytes:
             onset_s = (onset_ms - origin_ms) / 1000.0
             offset_s = (offset_ms - origin_ms) / 1000.0
 
-        window_indexes = [
-            i for i, t in enumerate(windowed.get("t_s") or [])
-            if _is_finite_number(t) and onset_s <= float(t) <= offset_s
-        ]
-        driver = _dominant_driver_label(windowed, window_indexes)
+        # Compute EXACT features for the interval bounds rather than averaging rolling windows.
+        if len(points) >= 2:
+            df = pd.DataFrame(points)
+            td = compute_time_domain_features(df)
+            poincare = compute_poincare_features(df)
+            freq = compute_hrv_frequency_features(df)
+            edr = compute_edr(df)
+
+            mean_hr = float(df["hr_bpm"].mean()) if "hr_bpm" in df.columns else None
+            mean_eda = float(df["eda_us"].mean()) if "eda_us" in df.columns else None
+            hr_sd = float(df["hr_bpm"].std(ddof=1)) if "hr_bpm" in df.columns and len(df) > 1 else 0.0
+            
+            phasic = 0.0
+            if "eda_us" in df.columns and len(df) > 1:
+                phasic = float(np.mean(np.abs(np.diff(df["eda_us"].dropna().to_numpy(dtype=float)))))
+
+            rmssd_val = float(td.get("rmssd_ms") or 0.0) if td.get("rmssd_ms") is not None else None
+            rsa_amp = float(edr.get("rsa_amplitude") or 0.0) if edr.get("rsa_amplitude") is not None else None
+            mean_rpm = float(edr.get("mean_rpm") or 0.0) if edr.get("mean_rpm") is not None else None
+
+            stress_v2 = None
+            v2_contrib: dict[str, float | None] = {}
+            if mean_hr is not None and mean_eda is not None:
+                stress_v2, v2_contrib = compute_stress_score_v2(
+                    rmssd_ms=rmssd_val or 0.0,
+                    mean_hr_bpm=mean_hr,
+                    eda_mean_us=mean_eda,
+                    eda_phasic_index=phasic,
+                    pnn50=td.get("pnn50"), # type: ignore[arg-type]
+                    sd1_sd2_ratio=poincare.get("sd1_sd2_ratio"),
+                    lf_nu=freq.get("lf_nu"),
+                    rsa_amplitude=rsa_amp,
+                )
+
+                decomp = decompose_stress(
+                    rmssd_ms=rmssd_val or 0.0,
+                    mean_hr_bpm=mean_hr,
+                    eda_mean_us=mean_eda,
+                    eda_phasic_index=phasic,
+                    rsa_amplitude=rsa_amp,
+                )
+                stress_v1 = decomp.total_score
+            else:
+                stress_v1 = None
+
+            # Extract v2 contributions safely
+            v2_hr_c = float(v2_contrib.get("hr") or 0.0)
+            v2_eda_c = float(v2_contrib.get("eda") or 0.0)
+            v2_phas_c = float(v2_contrib.get("phasic") or 0.0)
+            v2_vag_c = float(v2_contrib.get("vagal") or 0.0)
+            v2_sym_c = float(v2_contrib["sympathovagal"]) if v2_contrib.get("sympathovagal") is not None else None
+            v2_rig_c = float(v2_contrib["rigidity"]) if v2_contrib.get("rigidity") is not None else None
+            v2_rsa_c = float(v2_contrib["rsa"]) if v2_contrib.get("rsa") is not None else None
+
+            arousal = _mean(_window_values(windowed, "arousal_index", window_indexes))
+
+            # Exact dominant driver
+            contrib_map = {
+                "HR": v2_hr_c,
+                "EDA tonic": v2_eda_c,
+                "EDA phasic": v2_phas_c,
+                "vagal deficit": v2_vag_c,
+                "LF_nu": v2_sym_c or 0.0,
+                "rigidity": v2_rig_c or 0.0,
+                "RSA": v2_rsa_c or 0.0
+            }
+            driver = max(contrib_map, key=contrib_map.get) if any(v > 0 for v in contrib_map.values()) else "mixed"
+
+        else:
+            mean_hr = hr_sd = mean_eda = stress_v2 = mean_rpm = rmssd_val = rsa_amp = stress_v1 = None
+            v2_hr_c = v2_eda_c = v2_phas_c = v2_vag_c = v2_sym_c = v2_rig_c = v2_rsa_c = arousal = None
+            driver = "mixed"
+
         writer.writerow(
             [
                 interval["letter"],
                 interval["label"],
                 f"{onset_s:.1f}-{offset_s:.1f}",
-                _fmt(_mean(_window_values(windowed, "arousal_index", window_indexes)), 3),
+                _fmt(arousal, 3),
                 driver,
-                _fmt(_mean([point.get("hr_bpm") for point in points]), 1),
-                _fmt(_sample_sd([point.get("hr_bpm") for point in points]), 1),
-                _fmt(_mean([point.get("eda_us") for point in points]), 2),
-                _fmt(_mean(_window_values(windowed, "stress_v2", window_indexes)), 3),
-                _fmt(_mean(_window_values(windowed, "mean_rpm", window_indexes)), 1),
-                _fmt(_mean(_window_values(windowed, "rmssd", window_indexes)), 1),
-                _fmt(_mean(_window_values(windowed, "rsa_amplitude", window_indexes)), 1),
-                _fmt(_mean(_window_values(windowed, "stress", window_indexes)), 3),
-                _fmt(_mean(_window_values(windowed, "v2_hr_contribution", window_indexes)), 3),
-                _fmt(_mean(_window_values(windowed, "v2_eda_contribution", window_indexes)), 3),
-                _fmt(_mean(_window_values(windowed, "v2_phasic_contribution", window_indexes)), 3),
-                _fmt(_mean(_window_values(windowed, "v2_vagal_contribution", window_indexes)), 3),
-                _fmt(_mean(_window_values(windowed, "v2_sympathovagal_contribution", window_indexes)), 3),
-                _fmt(_mean(_window_values(windowed, "v2_rigidity_contribution", window_indexes)), 3),
-                _fmt(_mean(_window_values(windowed, "v2_rsa_contribution", window_indexes)), 3),
+                _fmt(mean_hr, 1),
+                _fmt(hr_sd, 1),
+                _fmt(mean_eda, 2),
+                _fmt(stress_v2, 3),
+                _fmt(mean_rpm, 1),
+                _fmt(rmssd_val, 1),
+                _fmt(rsa_amp, 1),
+                _fmt(stress_v1, 3),
+                _fmt(v2_hr_c, 3),
+                _fmt(v2_eda_c, 3),
+                _fmt(v2_phas_c, 3),
+                _fmt(v2_vag_c, 3),
+                _fmt(v2_sym_c, 3),
+                _fmt(v2_rig_c, 3),
+                _fmt(v2_rsa_c, 3),
                 len(window_indexes),
                 len(points),
                 int(onset_ms),
