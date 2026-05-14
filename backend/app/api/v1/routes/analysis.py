@@ -356,6 +356,7 @@ async def analyze(
     # ------ Extended analytics bundle -----------------------------------
     # Re-derive the cleaned dataframe so the frontend can render windowed,
     # spectral, and decomposition views without a second round-trip.
+    cleaned: pd.DataFrame | None = None
     try:
         drift_model = estimate_piecewise_drift(
             source_ts=pol_df["timestamp_ms"].astype(int).tolist(),
@@ -529,14 +530,14 @@ async def analyze(
         try:
             from app.services.processing.room_analysis import compute_room_stats
             event_markers = markers_summary.get("event_markers") or []
-            # Use the full cleaned DataFrame (not the subsampled timeseries)
-            # The 'cleaned' variable is the full-resolution DataFrame from the
-            # pipeline above. The extended["cleaned_timeseries"] is subsampled
-            # to 1000 points which is too sparse for short room intervals.
-            if 'cleaned' in dir() and cleaned is not None and len(cleaned) > 0:
+            # Use the full cleaned DataFrame (not the subsampled timeseries).
+            # The cleaned DF has timestamp_ms in UTC epoch ms (from EmotiBit).
+            # Markers have utc_ms in the same epoch. These must be on the same
+            # timeline for onset/offset gating to find matching data points.
+            if cleaned is not None and len(cleaned) > 0:
                 room_stats = compute_room_stats(cleaned, event_markers, order_affect_data)
             else:
-                # Fallback to timeseries if cleaned is not available
+                # Fallback to subsampled timeseries if cleaned was not built
                 ts_data = extended.get("cleaned_timeseries") or []
                 if ts_data:
                     room_df = pd.DataFrame(ts_data).dropna(subset=["timestamp_ms"])
