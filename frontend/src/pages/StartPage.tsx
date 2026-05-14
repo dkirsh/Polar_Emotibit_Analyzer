@@ -238,7 +238,7 @@ export const StartPage: React.FC = () => {
           <div className="field">
             <label htmlFor="f-subj">Subject ID<span className="req">*</span></label>
             <input id="f-subj" value={subjectId} onChange={(e) => setSubjectId(e.target.value)}
-                   placeholder="e.g. P01" />
+                   placeholder="e.g. P01 or P022-040 (range for batch ZIP)" />
           </div>
           <div className="field">
             <label htmlFor="f-study">Study / Project ID<span className="req">*</span></label>

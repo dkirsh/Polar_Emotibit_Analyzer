@@ -5,11 +5,17 @@ uploaded file inline as soon as the user drops it, separately from the
 full analysis step. These endpoints let the frontend surface a green-check
 or specific-missing-column message without committing to a full pipeline
 run.
+
+ZIP files are supported: the validator extracts them and finds the relevant
+CSV(s) inside, then validates that component.
 """
 from __future__ import annotations
 
+import io
+import zipfile
 from typing import Any
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException, UploadFile, status
 
 from app.schemas.analysis import CsvTimestampRange, CsvValidationResponse
@@ -17,24 +23,39 @@ from app.services.ingestion.parsers import (
     OPTIONAL_EMOTIBIT_ACCEL_COLUMNS,
     OPTIONAL_EMOTIBIT_RESP_COLUMNS,
     parse_emotibit_csv,
+    parse_native_emotibit,
     parse_polar_csv,
 )
+from app.services.ingestion.zip_ingestion import extract_and_classify_zip
 
 
 router = APIRouter(tags=["validate"])
 
 
+def _is_zip(raw_bytes: bytes) -> bool:
+    """Check if raw bytes are a ZIP archive (magic bytes PK\\x03\\x04)."""
+    return raw_bytes[:4] == b"PK\x03\x04" or raw_bytes[:4] == b"PK\x05\x06"
+
+
+# ── EmotiBit ──────────────────────────────────────────────────
+
+
 @router.post("/validate/csv/emotibit", response_model=CsvValidationResponse)
 async def validate_emotibit_csv(file: UploadFile) -> CsvValidationResponse:
-    """Validate an EmotiBit CSV without running the pipeline.
+    """Validate an EmotiBit CSV (or ZIP containing EmotiBit CSVs).
 
     Returns row count, present columns, and which optional columns are
     missing (e.g., accelerometer, respiration) so the researcher knows
     what downstream features will be available.
     """
+    raw_bytes = await file.read()
+
     try:
-        csv_text = (await file.read()).decode("utf-8", errors="replace")
-        df = parse_emotibit_csv(csv_text)
+        if _is_zip(raw_bytes):
+            df = _validate_emotibit_from_zip(raw_bytes, file.filename or "upload.zip")
+        else:
+            csv_text = raw_bytes.decode("utf-8", errors="replace")
+            df = parse_emotibit_csv(csv_text)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -62,18 +83,72 @@ async def validate_emotibit_csv(file: UploadFile) -> CsvValidationResponse:
     )
 
 
+def _validate_emotibit_from_zip(raw_bytes: bytes, filename: str) -> pd.DataFrame:
+    """Extract EmotiBit data from a ZIP file.
+
+    Handles two cases:
+    1. Native multi-channel EmotiBit files (*_EA.csv, *_AX.csv, etc.)
+       — merges channels from the FIRST subject found.
+    2. Pre-formatted EmotiBit CSVs with timestamp_ms + eda_us columns
+       — concatenates all matching files.
+    """
+    contents = extract_and_classify_zip(raw_bytes)
+
+    # Case 1: native channels found
+    if contents.emotibit_channels:
+        return parse_native_emotibit(contents.emotibit_channels)
+
+    # Case 2: pre-formatted CSV found
+    if contents.emotibit_formatted:
+        return parse_emotibit_csv(contents.emotibit_formatted)
+
+    # Case 3: no EmotiBit files — try parsing each CSV inside the ZIP
+    # to find any that look like EmotiBit data
+    frames: list[pd.DataFrame] = []
+    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename.split("/")[-1]
+            if not name.lower().endswith(".csv") or name.startswith(".") or name.startswith("__"):
+                continue
+            try:
+                text = zf.read(info.filename).decode("utf-8", errors="replace")
+                df = parse_emotibit_csv(text)
+                frames.append(df)
+            except Exception:
+                continue
+
+    if not frames:
+        raise ValueError(
+            f"ZIP file '{filename}' does not contain recognizable EmotiBit data. "
+            "Expected CSV files with columns: timestamp_ms, eda_us (pre-formatted) "
+            "or *_EA.csv with LocalTimestamp column (native format)."
+        )
+
+    # Concatenate all matching files (multi-subject batch)
+    combined = pd.concat(frames, ignore_index=True).sort_values("timestamp_ms")
+    return combined
+
+
+# ── Polar ─────────────────────────────────────────────────────
+
+
 @router.post("/validate/csv/polar", response_model=CsvValidationResponse)
 async def validate_polar_csv(file: UploadFile) -> CsvValidationResponse:
-    """Validate a Polar H10 CSV without running the pipeline.
+    """Validate a Polar H10 CSV (or ZIP containing Polar CSVs).
 
     Reports whether the file contains raw ECG (preferred), native RR
-    intervals, or only beat-level BPM. The distinction matters for
-    downstream HRV interpretability and is flagged here so the analyst
-    can decide before committing to an analysis.
+    intervals, or only beat-level BPM.
     """
+    raw_bytes = await file.read()
+
     try:
-        csv_text = (await file.read()).decode("utf-8", errors="replace")
-        df = parse_polar_csv(csv_text)
+        if _is_zip(raw_bytes):
+            df = _validate_polar_from_zip(raw_bytes, file.filename or "upload.zip")
+        else:
+            csv_text = raw_bytes.decode("utf-8", errors="replace")
+            df = parse_polar_csv(csv_text)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -106,32 +181,62 @@ async def validate_polar_csv(file: UploadFile) -> CsvValidationResponse:
     )
 
 
+def _validate_polar_from_zip(raw_bytes: bytes, filename: str) -> pd.DataFrame:
+    """Extract Polar data from a ZIP file."""
+    contents = extract_and_classify_zip(raw_bytes)
+
+    if contents.polar_text:
+        return parse_polar_csv(contents.polar_text)
+
+    # Try parsing each CSV to find Polar data
+    frames: list[pd.DataFrame] = []
+    last_attrs: dict[str, Any] = {}
+    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename.split("/")[-1]
+            if not name.lower().endswith(".csv") or name.startswith(".") or name.startswith("__"):
+                continue
+            try:
+                text = zf.read(info.filename).decode("utf-8", errors="replace")
+                df = parse_polar_csv(text)
+                last_attrs = dict(df.attrs)
+                frames.append(df)
+            except Exception:
+                continue
+
+    if not frames:
+        raise ValueError(
+            f"ZIP file '{filename}' does not contain recognizable Polar data. "
+            "Expected CSV files with columns: timestamp_ms + hr_bpm/rr_ms/ecg_uv "
+            "or utc_epoch_ns + rr_ms (native format)."
+        )
+
+    combined = pd.concat(frames, ignore_index=True).sort_values("timestamp_ms")
+    # Preserve attrs from the last successfully parsed file
+    combined.attrs.update(last_attrs)
+    combined.attrs["input_n_rows"] = int(len(combined))
+    return combined
+
+
+# ── Markers ───────────────────────────────────────────────────
+
+
 @router.post("/validate/csv/markers", response_model=CsvValidationResponse)
 async def validate_markers_csv(file: UploadFile) -> CsvValidationResponse:
-    """Validate an event-markers CSV without running the pipeline.
+    """Validate an event-markers CSV (or ZIP containing marker CSVs).
 
-    Schema (per docs/REAL_DATA_SYNC_COLLECTION_REPORT_2026-03-01.md in the
-    sibling emotibit_polar_data_system repo):
-        session_id, event_code, utc_ms, note (optional)
-
-    Known event codes: recording_start, stress_task_start, stress_task_end,
-    recovery_start, recording_end. Unknown codes are accepted but flagged.
+    Schema: session_id, event_code, utc_ms, note (optional)
     """
-    import io
-
-    import pandas as pd
-
-    KNOWN_CODES = {
-        "recording_start",
-        "stress_task_start",
-        "stress_task_end",
-        "recovery_start",
-        "recording_end",
-    }
+    raw_bytes = await file.read()
 
     try:
-        csv_text = (await file.read()).decode("utf-8", errors="replace")
-        df = pd.read_csv(io.StringIO(csv_text))
+        if _is_zip(raw_bytes):
+            df = _validate_markers_from_zip(raw_bytes, file.filename or "upload.zip")
+        else:
+            csv_text = raw_bytes.decode("utf-8", errors="replace")
+            df = pd.read_csv(io.StringIO(csv_text))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -141,22 +246,25 @@ async def validate_markers_csv(file: UploadFile) -> CsvValidationResponse:
     required = {"session_id", "event_code", "utc_ms"}
     missing = sorted(required.difference(df.columns))
     if missing:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"valid": False, "reason": f"Missing required columns: {missing}"},
-        )
+        # Try relaxed detection: maybe just event_code + utc_ms (no session_id)
+        if "event_code" in df.columns and "utc_ms" in df.columns:
+            pass  # Accept without session_id
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"valid": False, "reason": f"Missing required columns: {missing}"},
+            )
 
-    codes_present = sorted(set(df["event_code"].astype(str).tolist()))
-    # Markers don't carry a timestamp_range_ms unless the `utc_ms`
-    # column is populated; if it is, report span.
+    codes_present = sorted(set(df["event_code"].astype(str).tolist())) if "event_code" in df.columns else []
     ts_range: CsvTimestampRange | None = None
     if "utc_ms" in df.columns and len(df) > 0:
-        utc = df["utc_ms"].astype(int)
-        ts_range = CsvTimestampRange(
-            min=int(utc.min()),
-            max=int(utc.max()),
-            span_s=int((utc.max() - utc.min()) / 1000),
-        )
+        utc = pd.to_numeric(df["utc_ms"], errors="coerce").dropna().astype(int)
+        if len(utc) > 0:
+            ts_range = CsvTimestampRange(
+                min=int(utc.min()),
+                max=int(utc.max()),
+                span_s=int((utc.max() - utc.min()) / 1000),
+            )
     return CsvValidationResponse(
         valid=True,
         filename=file.filename,
@@ -166,6 +274,42 @@ async def validate_markers_csv(file: UploadFile) -> CsvValidationResponse:
         event_codes=codes_present,
         n_events=int(len(df)),
     )
+
+
+def _validate_markers_from_zip(raw_bytes: bytes, filename: str) -> pd.DataFrame:
+    """Extract markers data from a ZIP file."""
+    contents = extract_and_classify_zip(raw_bytes)
+
+    if contents.markers_text:
+        return pd.read_csv(io.StringIO(contents.markers_text))
+
+    # Try each CSV
+    frames: list[pd.DataFrame] = []
+    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename.split("/")[-1]
+            if not name.lower().endswith(".csv") or name.startswith(".") or name.startswith("__"):
+                continue
+            try:
+                text = zf.read(info.filename).decode("utf-8", errors="replace")
+                df = pd.read_csv(io.StringIO(text))
+                if "event_code" in df.columns and "utc_ms" in df.columns:
+                    frames.append(df)
+            except Exception:
+                continue
+
+    if not frames:
+        raise ValueError(
+            f"ZIP file '{filename}' does not contain recognizable event marker data. "
+            "Expected CSV files with columns: event_code, utc_ms."
+        )
+
+    return pd.concat(frames, ignore_index=True)
+
+
+# ── Order & Affect ────────────────────────────────────────────
 
 
 @router.post("/validate/csv/order_affect", response_model=CsvValidationResponse)

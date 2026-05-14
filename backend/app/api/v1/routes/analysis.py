@@ -193,17 +193,77 @@ async def analyze(
     operator: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
 ) -> AnalysisResponse:
-    """Run the V2.1 pipeline on a pre-synched pair of CSVs.
+    """Run the V2.1 pipeline on a pre-synched pair of CSVs (or ZIPs).
 
     All metadata fields are stored alongside the analysis for later recall
     by the "Recent sessions" list in view 1 and the session-identity bar
     in view 2.
     """
+    from app.services.ingestion.zip_ingestion import extract_and_classify_zip
+    from app.services.ingestion.parsers import parse_native_emotibit
+
+    def _is_zip(raw: bytes) -> bool:
+        return raw[:4] == b"PK\x03\x04" or raw[:4] == b"PK\x05\x06"
+
     try:
-        em_text = (await emotibit_file.read()).decode("utf-8", errors="replace")
-        pol_text = (await polar_file.read()).decode("utf-8", errors="replace")
-        em_df = parse_emotibit_csv(em_text)
-        pol_df = parse_polar_csv(pol_text)
+        em_raw = await emotibit_file.read()
+        if _is_zip(em_raw):
+            contents = extract_and_classify_zip(em_raw)
+            if contents.emotibit_channels:
+                em_df = parse_native_emotibit(contents.emotibit_channels)
+            elif contents.emotibit_formatted:
+                em_df = parse_emotibit_csv(contents.emotibit_formatted)
+            else:
+                # Brute-force: try each CSV in the ZIP
+                import io as _io, zipfile as _zf
+                frames = []
+                with _zf.ZipFile(_io.BytesIO(em_raw)) as zf:
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        name = info.filename.split("/")[-1]
+                        if not name.lower().endswith(".csv") or name.startswith("."):
+                            continue
+                        try:
+                            text = zf.read(info.filename).decode("utf-8", errors="replace")
+                            frames.append(parse_emotibit_csv(text))
+                        except Exception:
+                            continue
+                if not frames:
+                    raise ValueError("ZIP does not contain recognizable EmotiBit data.")
+                em_df = pd.concat(frames, ignore_index=True).sort_values("timestamp_ms")
+        else:
+            em_df = parse_emotibit_csv(em_raw.decode("utf-8", errors="replace"))
+
+        pol_raw = await polar_file.read()
+        if _is_zip(pol_raw):
+            contents = extract_and_classify_zip(pol_raw)
+            if contents.polar_text:
+                pol_df = parse_polar_csv(contents.polar_text)
+            else:
+                import io as _io, zipfile as _zf
+                frames = []
+                last_attrs: dict = {}
+                with _zf.ZipFile(_io.BytesIO(pol_raw)) as zf:
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        name = info.filename.split("/")[-1]
+                        if not name.lower().endswith(".csv") or name.startswith("."):
+                            continue
+                        try:
+                            text = zf.read(info.filename).decode("utf-8", errors="replace")
+                            df = parse_polar_csv(text)
+                            last_attrs = dict(df.attrs)
+                            frames.append(df)
+                        except Exception:
+                            continue
+                if not frames:
+                    raise ValueError("ZIP does not contain recognizable Polar data.")
+                pol_df = pd.concat(frames, ignore_index=True).sort_values("timestamp_ms")
+                pol_df.attrs.update(last_attrs)
+        else:
+            pol_df = parse_polar_csv(pol_raw.decode("utf-8", errors="replace"))
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -221,8 +281,33 @@ async def analyze(
     markers_summary: Optional[dict[str, Any]] = None
     if markers_file is not None:
         try:
-            mk_text = (await markers_file.read()).decode("utf-8", errors="replace")
-            mk_df = pd.read_csv(io.StringIO(mk_text))
+            mk_raw = await markers_file.read()
+            if _is_zip(mk_raw):
+                import zipfile as _zf
+                mk_frames = []
+                with _zf.ZipFile(io.BytesIO(mk_raw)) as zf:
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        name = info.filename.split("/")[-1]
+                        if not name.lower().endswith(".csv") or name.startswith("."):
+                            continue
+                        try:
+                            text = zf.read(info.filename).decode("utf-8", errors="replace")
+                            df = pd.read_csv(io.StringIO(text))
+                            if "event_code" in df.columns and "utc_ms" in df.columns:
+                                mk_frames.append(df)
+                            elif "event_code" in df.columns:
+                                mk_frames.append(df)
+                        except Exception:
+                            continue
+                if mk_frames:
+                    mk_df = pd.concat(mk_frames, ignore_index=True)
+                else:
+                    mk_df = pd.DataFrame(columns=["event_code", "utc_ms"])
+            else:
+                mk_text = mk_raw.decode("utf-8", errors="replace")
+                mk_df = pd.read_csv(io.StringIO(mk_text))
             event_markers: list[dict[str, Any]] = []
             if {"event_code", "utc_ms"}.issubset(set(mk_df.columns)):
                 for row in mk_df.to_dict(orient="records"):

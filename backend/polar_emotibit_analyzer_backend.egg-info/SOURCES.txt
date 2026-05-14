@@ -18,8 +18,10 @@ app/services/__init__.py
 app/services/ai/__init__.py
 app/services/ai/adapters.py
 app/services/ingestion/__init__.py
+app/services/ingestion/order_affect.py
 app/services/ingestion/parsers.py
 app/services/ingestion/synthetic.py
+app/services/ingestion/zip_ingestion.py
 app/services/processing/__init__.py
 app/services/processing/benchmark.py
 app/services/processing/clean.py
@@ -28,6 +30,7 @@ app/services/processing/extended_analytics.py
 app/services/processing/features.py
 app/services/processing/kubios_benchmark.py
 app/services/processing/pipeline.py
+app/services/processing/room_analysis.py
 app/services/processing/statistics.py
 app/services/processing/stress.py
 app/services/processing/sync.py
