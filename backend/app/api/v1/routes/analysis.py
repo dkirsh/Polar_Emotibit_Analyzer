@@ -353,6 +353,35 @@ async def analyze(
             detail=f"Pipeline error: {exc.__class__.__name__}: {exc}",
         )
 
+    # ── Diagnostic: log timestamp ranges so misalignment is visible ──────
+    _diag_em_min = int(em_df["timestamp_ms"].min()) if "timestamp_ms" in em_df.columns and len(em_df) > 0 else None
+    _diag_em_max = int(em_df["timestamp_ms"].max()) if _diag_em_min is not None else None
+    _diag_pol_min = int(pol_df["timestamp_ms"].min()) if "timestamp_ms" in pol_df.columns and len(pol_df) > 0 else None
+    _diag_pol_max = int(pol_df["timestamp_ms"].max()) if _diag_pol_min is not None else None
+    _diag_marker_utcs: list[int] = []
+    if markers_summary and isinstance(markers_summary.get("event_markers"), list):
+        _diag_marker_utcs = [int(m["utc_ms"]) for m in markers_summary["event_markers"] if "utc_ms" in m]
+    _diag_mk_min = min(_diag_marker_utcs) if _diag_marker_utcs else None
+    _diag_mk_max = max(_diag_marker_utcs) if _diag_marker_utcs else None
+    log.warning(
+        "TIMESTAMP DIAGNOSTIC: "
+        "EmotiBit[%s..%s] Polar[%s..%s] Markers[%s..%s] "
+        "n_em=%d n_pol=%d n_markers=%d",
+        _diag_em_min, _diag_em_max,
+        _diag_pol_min, _diag_pol_max,
+        _diag_mk_min, _diag_mk_max,
+        len(em_df), len(pol_df), len(_diag_marker_utcs),
+    )
+    if _diag_em_min is not None and _diag_mk_min is not None:
+        overlap = not (_diag_mk_max < _diag_em_min or _diag_mk_min > _diag_em_max)
+        log.warning(
+            "TIMESTAMP DIAGNOSTIC: markers %s data range. "
+            "Diff = marker_min - data_min = %s ms (%.1f s)",
+            "OVERLAP" if overlap else "DO NOT OVERLAP WITH",
+            _diag_mk_min - _diag_em_min,
+            (_diag_mk_min - _diag_em_min) / 1000.0,
+        )
+
     # ------ Extended analytics bundle -----------------------------------
     # Re-derive the cleaned dataframe so the frontend can render windowed,
     # spectral, and decomposition views without a second round-trip.
@@ -368,6 +397,24 @@ async def analyze(
         )
         synced = synchronize_signals(em_df, corrected)
         cleaned, _mar = clean_signals(synced)
+
+        # Diagnostic: cleaned DF timestamp range
+        if "timestamp_ms" in cleaned.columns and len(cleaned) > 0:
+            _c_min = int(cleaned["timestamp_ms"].min())
+            _c_max = int(cleaned["timestamp_ms"].max())
+            log.warning(
+                "TIMESTAMP DIAGNOSTIC: cleaned[%s..%s] span=%.1fs n=%d",
+                _c_min, _c_max, (_c_max - _c_min) / 1000.0, len(cleaned),
+            )
+            if _diag_mk_min is not None:
+                c_overlap = not (_diag_mk_max < _c_min or _diag_mk_min > _c_max)
+                log.warning(
+                    "TIMESTAMP DIAGNOSTIC: markers vs cleaned: %s. "
+                    "marker_min - cleaned_min = %s ms (%.1f s)",
+                    "OVERLAP" if c_overlap else "NO OVERLAP",
+                    _diag_mk_min - _c_min,
+                    (_diag_mk_min - _c_min) / 1000.0,
+                )
 
         # Compute session-level EDR for the decomposition
         session_edr = compute_edr(cleaned)
