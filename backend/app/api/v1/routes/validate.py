@@ -166,3 +166,39 @@ async def validate_markers_csv(file: UploadFile) -> CsvValidationResponse:
         event_codes=codes_present,
         n_events=int(len(df)),
     )
+
+
+@router.post("/validate/csv/order_affect", response_model=CsvValidationResponse)
+async def validate_order_affect_csv_endpoint(file: UploadFile) -> CsvValidationResponse:
+    """Validate an Order & Affect CSV without running the pipeline.
+
+    Expected schema: subject_id, room_number, room_type, valence, arousal.
+    One row per room per subject.
+    """
+    from app.services.ingestion.order_affect import validate_order_affect_csv
+
+    try:
+        csv_text = (await file.read()).decode("utf-8", errors="replace")
+        info = validate_order_affect_csv(csv_text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"valid": False, "reason": str(exc)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"valid": False, "reason": f"Parse error: {exc.__class__.__name__}: {exc}"},
+        )
+
+    return CsvValidationResponse(
+        valid=True,
+        filename=file.filename,
+        n_rows=info["n_rooms"],
+        columns_present=["subject_id", "room_number", "room_type", "valence", "arousal"],
+        subject_id_detected=info["subject_id"],
+        n_rooms=info["n_rooms"],
+        room_types=info["room_types"],
+        valence_range=info["valence_range"],
+        arousal_range=info["arousal_range"],
+    )

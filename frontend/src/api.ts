@@ -90,6 +90,18 @@ export type ValidateMarkersResponse = {
   n_events: number | null;
 };
 
+export type ValidateOrderAffectResponse = {
+  valid: true;
+  filename: string;
+  n_rows: number;
+  columns_present: string[];
+  subject_id_detected: string | null;
+  n_rooms: number | null;
+  room_types: string[] | null;
+  valence_range: { min: number | null; max: number | null } | null;
+  arousal_range: { min: number | null; max: number | null } | null;
+};
+
 export type RecentSession = {
   session_id: string;
   subject_id: string;
@@ -226,6 +238,34 @@ export type StoredSession = {
   } | null;
   result: AnalysisResponse;
   extended: ExtendedAnalytics | null;
+  order_affect?: {
+    subject_id: string;
+    n_rooms: number;
+    rooms: Array<{
+      room_number: number;
+      room_type: string;
+      valence: number | null;
+      arousal: number | null;
+    }>;
+  } | null;
+  room_stats?: Array<{
+    room_number: number;
+    room_key: string;
+    room_type: string;
+    onset_ms: number;
+    offset_ms: number;
+    duration_s: number;
+    sample_count: number;
+    mean_hr: number | null;
+    sd_hr: number | null;
+    mean_eda: number | null;
+    sd_eda: number | null;
+    rmssd: number | null;
+    stress_v2: number | null;
+    stress_v1: number | null;
+    valence: number | null;
+    arousal: number | null;
+  }> | null;
 };
 
 type ValidateResponse =
@@ -260,11 +300,15 @@ export async function validatePolarCsv(file: File) {
 export async function validateMarkersCsv(file: File) {
   return postFile<ValidateMarkersResponse>("/api/v1/validate/csv/markers", file);
 }
+export async function validateOrderAffectCsv(file: File) {
+  return postFile<ValidateOrderAffectResponse>("/api/v1/validate/csv/order_affect", file);
+}
 
 export type AnalyzePayload = {
   emotibit_file: File;
   polar_file: File;
   markers_file?: File | null;
+  order_affect_file?: File | null;
   session_id: string;
   subject_id: string;
   study_id: string;
@@ -289,6 +333,7 @@ export async function analyze(payload: AnalyzePayload): Promise<AnalysisResponse
   body.append("emotibit_file", payload.emotibit_file);
   body.append("polar_file", payload.polar_file);
   if (payload.markers_file) body.append("markers_file", payload.markers_file);
+  if (payload.order_affect_file) body.append("order_affect_file", payload.order_affect_file);
   body.append("session_id", payload.session_id);
   body.append("subject_id", payload.subject_id);
   body.append("study_id", payload.study_id);

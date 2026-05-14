@@ -23,9 +23,11 @@ class Session(Base):
     emotibit_csv_path = Column(String, nullable=True)
     polar_csv_path = Column(String, nullable=True)
     event_markers_csv_path = Column(String, nullable=True)
+    order_affect_csv_path = Column(String, nullable=True)
     
     sync_passed = Column(Integer, default=0) # 0 = false, 1 = true
     sync_metrics = Column(JSON, nullable=True) # stores drift, overlap data
+    room_order = Column(JSON, nullable=True) # stores room assignment list from order & affect
     
     created_at = Column(DateTime, default=datetime.utcnow)
     

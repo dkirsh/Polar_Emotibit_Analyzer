@@ -139,9 +139,181 @@ def _parse_polar_beat_metrics(raw: pd.DataFrame, timestamp_ms: pd.Series) -> pd.
     return parsed.sort_values("timestamp_ms").reset_index(drop=True)
 
 
+# ---- Native EmotiBit format support ----------------------------------------
+# Native EmotiBit exports produce separate CSV files per channel (EA, AX, AY,
+# AZ) with a `LocalTimestamp` column (Unix seconds, float). These must be
+# merged onto a common timeline before the pipeline can consume them.
+
+NATIVE_EMOTIBIT_TIMESTAMP_COL = "LocalTimestamp"
+NATIVE_EMOTIBIT_CHANNEL_MAP = {
+    "EA": "eda_us",
+    "AX": "acc_x",
+    "AY": "acc_y",
+    "AZ": "acc_z",
+}
+_MERGE_TOLERANCE_S = 0.05  # per PROMPT_INPUT spec
+
+
+def _is_native_emotibit(df: pd.DataFrame) -> bool:
+    """Check if a single CSV looks like a native EmotiBit channel file."""
+    cols = set(c.strip() for c in df.columns)
+    return NATIVE_EMOTIBIT_TIMESTAMP_COL in cols and "timestamp_ms" not in cols
+
+
+def parse_native_emotibit(channel_texts: dict[str, str]) -> pd.DataFrame:
+    """Parse native EmotiBit multi-channel CSVs and merge onto the EA timeline.
+
+    Args:
+        channel_texts: mapping of channel suffix to raw CSV text.
+            Expected keys: "EA" (required), and optionally "AX", "AY", "AZ".
+
+    Returns:
+        DataFrame with columns: timestamp_ms, eda_us, acc_x, acc_y, acc_z.
+    """
+    if "EA" not in channel_texts:
+        raise ValueError(
+            "Native EmotiBit upload requires an EDA channel file (*_EA.csv)."
+        )
+
+    dfs: dict[str, pd.DataFrame] = {}
+    for suffix, text in channel_texts.items():
+        df = pd.read_csv(StringIO(text))
+        if NATIVE_EMOTIBIT_TIMESTAMP_COL not in df.columns:
+            raise ValueError(
+                f"Native EmotiBit {suffix} file missing '{NATIVE_EMOTIBIT_TIMESTAMP_COL}' column."
+            )
+        df[NATIVE_EMOTIBIT_TIMESTAMP_COL] = pd.to_numeric(
+            df[NATIVE_EMOTIBIT_TIMESTAMP_COL], errors="coerce"
+        )
+        # Identify the data column: the first column that is not LocalTimestamp
+        data_cols = [c for c in df.columns if c != NATIVE_EMOTIBIT_TIMESTAMP_COL]
+        if not data_cols:
+            raise ValueError(f"Native EmotiBit {suffix} file has no data column.")
+        # Use the first data column and rename to our schema name
+        target_name = NATIVE_EMOTIBIT_CHANNEL_MAP.get(suffix, data_cols[0])
+        df = df[[NATIVE_EMOTIBIT_TIMESTAMP_COL, data_cols[0]]].copy()
+        df.columns = ["local_ts", target_name]
+        df[target_name] = pd.to_numeric(df[target_name], errors="coerce")
+        df = df.dropna().sort_values("local_ts").reset_index(drop=True)
+        dfs[suffix] = df
+
+    # Build timeline from EA channel
+    ea = dfs["EA"]
+    result = pd.DataFrame({
+        "timestamp_ms": np.round(ea["local_ts"].to_numpy() * 1000).astype(int),
+        "eda_us": ea["eda_us"].to_numpy(),
+    })
+
+    # Merge accelerometer channels by nearest timestamp
+    for suffix in ("AX", "AY", "AZ"):
+        if suffix not in dfs:
+            continue
+        chan = dfs[suffix]
+        target_col = NATIVE_EMOTIBIT_CHANNEL_MAP[suffix]
+        chan_ts = chan["local_ts"].to_numpy()
+        ea_ts = ea["local_ts"].to_numpy()
+        # For each EA timestamp, find the nearest channel timestamp
+        idxs = np.searchsorted(chan_ts, ea_ts, side="left")
+        idxs = np.clip(idxs, 0, len(chan_ts) - 1)
+        # Check the neighbor to the left as well
+        left = np.clip(idxs - 1, 0, len(chan_ts) - 1)
+        use_left = np.abs(chan_ts[left] - ea_ts) < np.abs(chan_ts[idxs] - ea_ts)
+        idxs[use_left] = left[use_left]
+        # Apply tolerance: NaN if too far
+        deltas = np.abs(chan_ts[idxs] - ea_ts)
+        values = chan[target_col].to_numpy()[idxs].astype(float)
+        values[deltas > _MERGE_TOLERANCE_S] = np.nan
+        result[target_col] = values
+
+    result = result.dropna(subset=["eda_us"]).sort_values("timestamp_ms").reset_index(drop=True)
+    return result
+
+
+# ---- Native Polar format support ------------------------------------------
+# Native Polar H10 exports use `utc_epoch_ns` for timestamps and `rr_ms` or
+# `rr` for inter-beat intervals, with metadata rows prefixed by `#`.
+
+NATIVE_POLAR_TIMESTAMP_COL = "utc_epoch_ns"
+NATIVE_POLAR_RR_CANDIDATES = ("rr_ms", "rr", "RR", "ibi_ms", "ibi")
+
+
+def _is_native_polar(df: pd.DataFrame) -> bool:
+    """Check if a CSV looks like a native Polar export (utc_epoch_ns)."""
+    cols = set(c.strip() for c in df.columns)
+    return NATIVE_POLAR_TIMESTAMP_COL in cols and "timestamp_ms" not in cols
+
+
+def parse_native_polar(csv_text: str) -> pd.DataFrame:
+    """Parse a native Polar H10 CSV with utc_epoch_ns timestamps.
+
+    Skips comment rows starting with '#'. Converts nanosecond timestamps
+    to milliseconds and derives hr_bpm from rr_ms.
+
+    Returns:
+        DataFrame with columns: timestamp_ms, hr_bpm, rr_ms, rr_source.
+    """
+    # Filter out comment lines
+    lines = [line for line in csv_text.split("\n") if not line.strip().startswith("#")]
+    filtered_text = "\n".join(lines)
+
+    raw = pd.read_csv(StringIO(filtered_text))
+    if NATIVE_POLAR_TIMESTAMP_COL not in raw.columns:
+        raise ValueError(
+            f"Native Polar file missing '{NATIVE_POLAR_TIMESTAMP_COL}' column."
+        )
+
+    # Convert nanosecond timestamps to milliseconds
+    ts_ns = pd.to_numeric(raw[NATIVE_POLAR_TIMESTAMP_COL], errors="coerce")
+    timestamp_ms = np.round(ts_ns / 1_000_000.0).astype(int)
+
+    # Find the RR column
+    rr_col = _first_present(list(raw.columns), NATIVE_POLAR_RR_CANDIDATES)
+    if rr_col is None:
+        raise ValueError(
+            f"Native Polar file missing RR column. Expected one of: "
+            f"{list(NATIVE_POLAR_RR_CANDIDATES)}. Got: {list(raw.columns)}"
+        )
+
+    rr_ms = pd.to_numeric(raw[rr_col], errors="coerce")
+
+    parsed = pd.DataFrame({
+        "timestamp_ms": timestamp_ms,
+        "rr_ms": rr_ms,
+    })
+    parsed = parsed.dropna()
+    parsed["rr_ms"] = parsed["rr_ms"].clip(lower=1.0)
+    parsed["hr_bpm"] = 60_000.0 / parsed["rr_ms"]
+    parsed["rr_source"] = "native_polar"
+
+    input_columns = list(raw.columns)
+    input_n_rows = int(len(raw))
+    parsed = parsed.sort_values("timestamp_ms").reset_index(drop=True)
+    parsed.attrs.update({
+        "input_columns_present": input_columns,
+        "input_n_rows": input_n_rows,
+        "polar_input_mode": "native_rr",
+        "has_raw_ecg": False,
+        "has_native_rr": True,
+        "rr_source": "native_polar",
+        "rr_source_note": (
+            "Native Polar RR intervals (utc_epoch_ns + rr_ms) — research-grade HRV."
+        ),
+    })
+    return parsed
+
+
 def parse_emotibit_csv(csv_text: str) -> pd.DataFrame:
-    """Parse EmotiBit CSV and enforce minimal schema."""
+    """Parse EmotiBit CSV and enforce minimal schema.
+
+    Auto-detects native EmotiBit format (LocalTimestamp column) for single-
+    channel files and converts them to the standard schema.
+    """
     df = pd.read_csv(StringIO(csv_text))
+
+    # Auto-detect native single-file EmotiBit format
+    if _is_native_emotibit(df):
+        return parse_native_emotibit({"EA": csv_text})
+
     _validate_columns(df, REQUIRED_EMOTIBIT_COLUMNS, "EmotiBit")
     parsed = df.copy()
     parsed["timestamp_ms"] = parsed["timestamp_ms"].astype(int)
@@ -163,12 +335,22 @@ def parse_polar_csv(csv_text: str) -> pd.DataFrame:
     recognized ECG column such as `ecg_uv`). In that case HR and RR are derived
     in-app from the raw trace.
 
+    Also accepts native Polar format with `utc_epoch_ns` + `rr_ms` columns.
+
     Backward-compatible input: beat-level Polar export with `hr_bpm`, optional
     `rr_ms`, and `timestamp_ms`.
     """
-    raw = pd.read_csv(StringIO(csv_text))
+    # Filter comment lines before initial read
+    lines = [line for line in csv_text.split("\n") if not line.strip().startswith("#")]
+    filtered_text = "\n".join(lines)
+
+    raw = pd.read_csv(StringIO(filtered_text))
     input_columns = list(raw.columns)
     input_n_rows = int(len(raw))
+
+    # Auto-detect native Polar format (utc_epoch_ns)
+    if _is_native_polar(raw):
+        return parse_native_polar(csv_text)
 
     timestamp_ms = _coerce_polar_timestamp_ms(raw)
     ecg_col = _first_present(input_columns, POLAR_ECG_COLUMNS)

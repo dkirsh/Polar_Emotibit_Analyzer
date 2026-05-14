@@ -7,9 +7,11 @@ import {
   RecentSession,
   ValidateEmotibitResponse,
   ValidateMarkersResponse,
+  ValidateOrderAffectResponse,
   ValidatePolarResponse,
   validateEmotibitCsv,
   validateMarkersCsv,
+  validateOrderAffectCsv,
   validatePolarCsv,
 } from "../api";
 
@@ -28,7 +30,7 @@ type SavedSettings = {
   notes: string;
 };
 
-type UploadSlot = "em" | "pol" | "mk";
+type UploadSlot = "em" | "pol" | "mk" | "oa";
 
 const SETTINGS_KEY = "polar-emotibit:last-settings";
 
@@ -59,6 +61,7 @@ const draft = {
   emotibit: { file: null } as FileSlotState<ValidateEmotibitResponse>,
   polar: { file: null } as FileSlotState<ValidatePolarResponse>,
   markers: { file: null } as FileSlotState<ValidateMarkersResponse>,
+  orderAffect: { file: null } as FileSlotState<ValidateOrderAffectResponse>,
 };
 
 /**
@@ -87,6 +90,7 @@ export const StartPage: React.FC = () => {
   const [emotibit, setEmotibit] = useState<FileSlotState<ValidateEmotibitResponse>>(draft.emotibit);
   const [polar, setPolar] = useState<FileSlotState<ValidatePolarResponse>>(draft.polar);
   const [markers, setMarkers] = useState<FileSlotState<ValidateMarkersResponse>>(draft.markers);
+  const [orderAffect, setOrderAffect] = useState<FileSlotState<ValidateOrderAffectResponse>>(draft.orderAffect);
 
   // Submit state
   const [submitting, setSubmitting] = useState(false);
@@ -106,6 +110,7 @@ export const StartPage: React.FC = () => {
   useEffect(() => { draft.emotibit = emotibit; }, [emotibit]);
   useEffect(() => { draft.polar = polar; }, [polar]);
   useEffect(() => { draft.markers = markers; }, [markers]);
+  useEffect(() => { draft.orderAffect = orderAffect; }, [orderAffect]);
 
   const hasValidEmotibit = emotibit.file !== null && "status" in emotibit && emotibit.status === "valid";
   const hasValidPolar = polar.file !== null && "status" in polar && polar.status === "valid";
@@ -115,7 +120,7 @@ export const StartPage: React.FC = () => {
       which: UploadSlot,
       file: File,
     ) => {
-      const existing = which === "em" ? emotibit.file : which === "pol" ? polar.file : markers.file;
+      const existing = which === "em" ? emotibit.file : which === "pol" ? polar.file : which === "mk" ? markers.file : orderAffect.file;
       if (existing && !window.confirm(`${slotLabel(which)} already contains ${existing.name}. Replace it with ${file.name}?`)) {
         return;
       }
@@ -125,7 +130,8 @@ export const StartPage: React.FC = () => {
         const invalid = { file, status: "invalid" as const, error: localCheck.message };
         if (which === "em") setEmotibit(invalid);
         else if (which === "pol") setPolar(invalid);
-        else setMarkers(invalid);
+        else if (which === "mk") setMarkers(invalid);
+        else setOrderAffect(invalid);
         return;
       }
       if (localCheck.confirm && !window.confirm(localCheck.confirm)) {
@@ -140,13 +146,17 @@ export const StartPage: React.FC = () => {
         setPolar({ file, status: "validating" });
         try { setPolar({ file, status: "valid", info: await validatePolarCsv(file) }); }
         catch (e) { setPolar({ file, status: "invalid", error: (e as Error).message }); }
-      } else {
+      } else if (which === "mk") {
         setMarkers({ file, status: "validating" });
         try { setMarkers({ file, status: "valid", info: await validateMarkersCsv(file) }); }
         catch (e) { setMarkers({ file, status: "invalid", error: (e as Error).message }); }
+      } else {
+        setOrderAffect({ file, status: "validating" });
+        try { setOrderAffect({ file, status: "valid", info: await validateOrderAffectCsv(file) }); }
+        catch (e) { setOrderAffect({ file, status: "invalid", error: (e as Error).message }); }
       }
     },
-    [emotibit.file, markers.file, polar.file],
+    [emotibit.file, markers.file, polar.file, orderAffect.file],
   );
 
   const submitEnabled =
@@ -170,6 +180,7 @@ export const StartPage: React.FC = () => {
           emotibit_file: emotibit.file!,
           polar_file: polar.file!,
           markers_file: markers.file ?? null,
+          order_affect_file: orderAffect.file ?? null,
           session_id: sessionId.trim(),
           subject_id: subjectId.trim(),
           study_id: studyId.trim(),
@@ -290,6 +301,16 @@ export const StartPage: React.FC = () => {
               `${info.n_events ?? info.n_rows} markers · codes: ${(info.event_codes ?? []).join(", ") || "none"}`
             }
           />
+          <DropSlot
+            label="Order & Affect CSV (room order + valence/arousal)"
+            required={false}
+            state={orderAffect}
+            onFile={(f) => onDropFile("oa", f)}
+            onClear={() => setOrderAffect({ file: null })}
+            describeInfo={(info) =>
+              `${info.n_rooms ?? 0} rooms · subject ${info.subject_id_detected ?? "?"} · types: ${(info.room_types ?? []).join(", ") || "none"}`
+            }
+          />
 
           <button className="submit-btn" disabled={!submitEnabled} onClick={onSubmit}
                   aria-busy={submitting}>
@@ -355,7 +376,8 @@ export const StartPage: React.FC = () => {
 function slotLabel(which: UploadSlot): string {
   if (which === "em") return "EmotiBit slot";
   if (which === "pol") return "Polar slot";
-  return "Event markers slot";
+  if (which === "mk") return "Event markers slot";
+  return "Order & Affect slot";
 }
 
 async function checkFileForSlot(
@@ -363,14 +385,25 @@ async function checkFileForSlot(
   which: UploadSlot,
 ): Promise<{ ok: true; confirm?: string } | { ok: false; message: string }> {
   const name = file.name.toLowerCase();
+
+  // ZIP files are always accepted — the backend classifies contents
+  if (name.endsWith(".zip")) {
+    return { ok: true };
+  }
+
   const header = await readCsvHeader(file);
   const columns = header.split(",").map((c) => c.trim().toLowerCase());
   const has = (col: string) => columns.includes(col);
   const hasAny = (cols: string[]) => cols.some(has);
   const filenameHas = (pattern: RegExp) => pattern.test(file.name);
+
+  // Native format detection
+  const looksLikeNativeEmotibit = has("localtimestamp") || filenameHas(/_E[AXYZ]\.csv$/i);
+  const looksLikeNativePolar = has("utc_epoch_ns");
   const looksLikeMarkers = has("event_code") || has("utc_ms") || filenameHas(/(^|[_\-\s])(event|events|marker|markers|sync)([_\-\s.]|$)/i);
-  const looksLikePolar = hasAny(["hr_bpm", "rr_ms", "ecg_uv", "ecg_mv", "ecg", "raw_ecg", "raw_ecg_uv", "voltage_uv", "timestamp_ns"]) || filenameHas(/polar|h10|hrv|ecg|rr/i);
-  const looksLikeEmotibit = has("eda_us") || hasAny(["acc_x", "acc_y", "acc_z", "resp_bpm"]) || filenameHas(/emotibit|eda|gsr/i);
+  const looksLikePolar = looksLikeNativePolar || hasAny(["hr_bpm", "rr_ms", "ecg_uv", "ecg_mv", "ecg", "raw_ecg", "raw_ecg_uv", "voltage_uv", "timestamp_ns"]) || filenameHas(/polar|h10|hrv|ecg|rr/i);
+  const looksLikeEmotibit = looksLikeNativeEmotibit || has("eda_us") || hasAny(["acc_x", "acc_y", "acc_z", "resp_bpm"]) || filenameHas(/emotibit|eda|gsr/i);
+  const looksLikeOrderAffect = hasAny(["room_type", "room_order", "valence", "arousal"]) || filenameHas(/order|affect|condition/i);
 
   if (which === "pol") {
     if (looksLikeMarkers) {
@@ -408,8 +441,17 @@ async function checkFileForSlot(
     }
   }
 
-  if (!name.endsWith(".csv")) {
-    return { ok: true, confirm: `${file.name} is not named as a .csv file. Try it anyway?` };
+  if (which === "oa") {
+    if (looksLikePolar || looksLikeEmotibit || looksLikeMarkers) {
+      return { ok: false, message: "This does not look like an Order & Affect file. Expected columns: subject_id, room_number, room_type, valence, arousal." };
+    }
+    if (!looksLikeOrderAffect) {
+      return { ok: true, confirm: `${file.name} does not show the expected Order & Affect columns (subject_id, room_type, valence, arousal). Try it anyway?` };
+    }
+  }
+
+  if (!name.endsWith(".csv") && !name.endsWith(".zip")) {
+    return { ok: true, confirm: `${file.name} is not named as a .csv or .zip file. Try it anyway?` };
   }
   return { ok: true };
 }
@@ -452,7 +494,7 @@ function DropSlot<T>({
   const openPicker = () => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".csv,text/csv";
+    input.accept = ".csv,.zip,text/csv,application/zip";
     input.onchange = () => { if (input.files?.[0]) onFile(input.files[0]); };
     input.click();
   };
@@ -497,7 +539,7 @@ function DropSlot<T>({
         )}
       </div>
       {state.file === null ? (
-        <p style={{ color: "#888" }}>Drag CSV here, or click to browse</p>
+        <p style={{ color: "#888" }}>Drag CSV or ZIP here, or click to browse</p>
       ) : (
         <>
           <div className="filename">{state.file.name}</div>

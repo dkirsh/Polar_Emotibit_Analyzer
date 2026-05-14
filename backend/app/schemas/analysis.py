@@ -49,6 +49,8 @@ class SessionDetail(BaseModel):
     markers_summary: dict[str, Any] | None = None
     result: dict[str, Any]
     extended: dict[str, Any] | None = None
+    order_affect: dict[str, Any] | None = None
+    room_stats: list[dict[str, Any]] | None = None
 
 
 class CsvTimestampRange(BaseModel):
@@ -87,6 +89,13 @@ class CsvValidationResponse(BaseModel):
     # Markers-specific
     event_codes: list[str] | None = None
     n_events: int | None = None
+
+    # Order & Affect-specific
+    subject_id_detected: str | None = None
+    n_rooms: int | None = None
+    room_types: list[str] | None = None
+    valence_range: dict[str, float | None] | None = None
+    arousal_range: dict[str, float | None] | None = None
 
 
 class IngestionSummary(BaseModel):

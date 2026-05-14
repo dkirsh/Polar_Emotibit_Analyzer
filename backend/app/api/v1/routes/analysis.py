@@ -185,6 +185,7 @@ async def analyze(
     emotibit_file: UploadFile,
     polar_file: UploadFile,
     markers_file: Optional[UploadFile] = None,
+    order_affect_file: Optional[UploadFile] = None,
     session_id: str = Form(...),
     subject_id: str = Form(...),
     study_id: str = Form(...),
@@ -426,6 +427,32 @@ async def analyze(
     except Exception:  # noqa: BLE001
         extended = None
 
+    # Parse Order & Affect file if provided
+    order_affect_data: Optional[dict[str, Any]] = None
+    if order_affect_file is not None:
+        try:
+            from app.services.ingestion.order_affect import parse_order_affect_csv
+            oa_text = (await order_affect_file.read()).decode("utf-8", errors="replace")
+            oa_parsed = parse_order_affect_csv(oa_text)
+            order_affect_data = oa_parsed.to_dict()
+        except Exception:  # noqa: BLE001
+            order_affect_data = None
+
+    # Compute room-level stats if markers are present
+    room_stats: Optional[list[dict[str, Any]]] = None
+    if markers_summary and extended is not None:
+        try:
+            from app.services.processing.room_analysis import compute_room_stats
+            event_markers = markers_summary.get("event_markers") or []
+            # Use the full cleaned timeseries (not subsampled) for room stats
+            ts_data = extended.get("cleaned_timeseries") or []
+            if ts_data:
+                room_df = pd.DataFrame(ts_data).dropna(subset=["timestamp_ms"])
+                room_stats = compute_room_stats(room_df, event_markers, order_affect_data)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Room stats computation failed: %s", exc)
+            room_stats = None
+
     # Persist in the in-process store keyed by session_id (latest-wins).
     analysis_id = str(uuid.uuid4())
     stored = {
@@ -440,6 +467,8 @@ async def analyze(
         "markers_summary": markers_summary,
         "result": result.model_dump() if hasattr(result, "model_dump") else result.dict(),
         "extended": extended,
+        "order_affect": order_affect_data,
+        "room_stats": room_stats,
     }
     _SESSION_STORE[session_id] = stored
     _persist_store()
