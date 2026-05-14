@@ -195,12 +195,18 @@ def _extract_room_intervals(markers: list[dict[str, Any]]) -> list[dict[str, Any
             key = code[:-7]
             by_key.setdefault(key, {"key": key})["offset_ms"] = utc_ms
 
-    intervals: list[dict[str, Any]] = []
-    for key, interval in sorted(by_key.items(), key=lambda kv: kv[1].get("onset_ms", 0)):
-        if "onset_ms" not in interval or "offset_ms" not in interval:
-            continue
+    # Sort by onset_ms ASCENDING = chronological visit order.
+    # For negative-offset timestamps (relative to recording end), the most
+    # negative value is the earliest event in the session.
+    sorted_intervals = sorted(
+        [v for v in by_key.values() if "onset_ms" in v and "offset_ms" in v],
+        key=lambda iv: iv.get("onset_ms", 0),
+    )
 
-        # Determine room number
+    for idx, interval in enumerate(sorted_intervals):
+        key = str(interval["key"])
+
+        # Determine room number from the marker key name
         room_number = 0  # baseline
         if key.lower().startswith("room") and key[4:].isdigit():
             room_number = int(key[4:])
@@ -210,6 +216,7 @@ def _extract_room_intervals(markers: list[dict[str, Any]]) -> list[dict[str, Any
         intervals.append({
             "key": key,
             "room_number": room_number,
+            "room_index": idx,  # chronological position (0 = first visited)
             "onset_ms": interval["onset_ms"],
             "offset_ms": interval["offset_ms"],
         })

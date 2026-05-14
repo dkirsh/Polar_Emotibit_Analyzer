@@ -529,11 +529,18 @@ async def analyze(
         try:
             from app.services.processing.room_analysis import compute_room_stats
             event_markers = markers_summary.get("event_markers") or []
-            # Use the full cleaned timeseries (not subsampled) for room stats
-            ts_data = extended.get("cleaned_timeseries") or []
-            if ts_data:
-                room_df = pd.DataFrame(ts_data).dropna(subset=["timestamp_ms"])
-                room_stats = compute_room_stats(room_df, event_markers, order_affect_data)
+            # Use the full cleaned DataFrame (not the subsampled timeseries)
+            # The 'cleaned' variable is the full-resolution DataFrame from the
+            # pipeline above. The extended["cleaned_timeseries"] is subsampled
+            # to 1000 points which is too sparse for short room intervals.
+            if 'cleaned' in dir() and cleaned is not None and len(cleaned) > 0:
+                room_stats = compute_room_stats(cleaned, event_markers, order_affect_data)
+            else:
+                # Fallback to timeseries if cleaned is not available
+                ts_data = extended.get("cleaned_timeseries") or []
+                if ts_data:
+                    room_df = pd.DataFrame(ts_data).dropna(subset=["timestamp_ms"])
+                    room_stats = compute_room_stats(room_df, event_markers, order_affect_data)
         except Exception as exc:  # noqa: BLE001
             log.warning("Room stats computation failed: %s", exc)
             room_stats = None
