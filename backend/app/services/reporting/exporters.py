@@ -325,6 +325,29 @@ def _session_event_intervals(session_record: dict[str, Any]) -> list[dict[str, A
         interval for interval in by_key.values()
         if "onset_ms" in interval and "offset_ms" in interval
     ]
+
+    # Filter to intervals that overlap the data's timestamp range.
+    # When multi-subject ZIPs are uploaded, markers from other sessions
+    # (days/weeks apart) would otherwise create intervals with zero
+    # matching data points → all dashes.
+    timeseries = (session_record.get("extended") or {}).get("cleaned_timeseries") or []
+    if timeseries:
+        data_min = _session_time_origin_ms(timeseries)
+        if data_min is not None:
+            # Find the last valid timestamp
+            data_max = data_min
+            for pt in reversed(timeseries):
+                v = pt.get("timestamp_ms")
+                if _is_finite_number(v):
+                    data_max = float(v)
+                    break
+            tolerance_ms = 60_000  # 60s tolerance
+            complete = [
+                iv for iv in complete
+                if iv["offset_ms"] >= (data_min - tolerance_ms)
+                and iv["onset_ms"] <= (data_max + tolerance_ms)
+            ]
+
     for index, interval in enumerate(sorted(complete, key=lambda row: row["onset_ms"])):
         key = str(interval["key"])
         intervals.append(

@@ -46,8 +46,16 @@ def compute_room_stats(
     if cleaned_df is None or len(cleaned_df) == 0:
         return []
 
-    # Extract room onset/offset pairs from markers
-    intervals = _extract_room_intervals(markers)
+    # Determine data timestamp range for filtering cross-session markers
+    data_range: tuple[float, float] | None = None
+    if "timestamp_ms" in cleaned_df.columns and len(cleaned_df) > 0:
+        data_range = (
+            float(cleaned_df["timestamp_ms"].min()),
+            float(cleaned_df["timestamp_ms"].max()),
+        )
+
+    # Extract room onset/offset pairs from markers, filtered to this session
+    intervals = _extract_room_intervals(markers, data_range=data_range)
     if not intervals:
         return []
 
@@ -171,11 +179,21 @@ def compute_room_stats(
     return results
 
 
-def _extract_room_intervals(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _extract_room_intervals(
+    markers: list[dict[str, Any]],
+    data_range: tuple[float, float] | None = None,
+) -> list[dict[str, Any]]:
     """Extract room onset/offset pairs from event markers.
 
     Handles room markers named `roomN_onset` / `roomN_offset` and
     `baseline_onset` / `baseline_offset`.
+
+    Args:
+        markers: List of marker dicts with event_code and utc_ms.
+        data_range: Optional (min_ms, max_ms) of the data's timestamp_ms.
+            When provided, only intervals that overlap the data range are
+            returned. This filters out markers from other sessions when
+            a multi-subject ZIP is uploaded.
 
     Returns list of dicts with: key, room_number, onset_ms, offset_ms.
     """
@@ -195,14 +213,25 @@ def _extract_room_intervals(markers: list[dict[str, Any]]) -> list[dict[str, Any
             key = code[:-7]
             by_key.setdefault(key, {"key": key})["offset_ms"] = utc_ms
 
-    # Sort by onset_ms ASCENDING = chronological visit order.
-    # For negative-offset timestamps (relative to recording end), the most
-    # negative value is the earliest event in the session.
-    sorted_intervals = sorted(
-        [v for v in by_key.values() if "onset_ms" in v and "offset_ms" in v],
-        key=lambda iv: iv.get("onset_ms", 0),
-    )
+    # Only keep complete intervals (have both onset and offset)
+    complete = [v for v in by_key.values() if "onset_ms" in v and "offset_ms" in v]
 
+    # Filter to intervals that overlap the data's timestamp range.
+    # This is critical for multi-subject ZIPs where markers from other
+    # sessions/days would otherwise pollute the results.
+    if data_range is not None:
+        d_min, d_max = data_range
+        # Allow 60s tolerance on each side for markers that bracket the data
+        tolerance_ms = 60_000
+        complete = [
+            iv for iv in complete
+            if iv["offset_ms"] >= (d_min - tolerance_ms) and iv["onset_ms"] <= (d_max + tolerance_ms)
+        ]
+
+    # Sort by onset_ms ASCENDING = chronological visit order
+    sorted_intervals = sorted(complete, key=lambda iv: iv.get("onset_ms", 0))
+
+    intervals: list[dict[str, Any]] = []
     for idx, interval in enumerate(sorted_intervals):
         key = str(interval["key"])
 
