@@ -37,7 +37,36 @@ type ArousalPairwiseComparison = {
 };
 
 type ConditionAggregateCondition = NonNullable<StoredSession["condition_aggregate"]>["conditions"][number];
-type ConditionMetricKey = "arousal_index" | "stress_v2" | "self_report_valence" | "self_report_arousal";
+type ConditionMetricKey =
+  | "arousal_index"
+  | "stress_v2"
+  | "mean_hr"
+  | "mean_eda"
+  | "rmssd"
+  | "rsa_amplitude"
+  | "self_report_valence"
+  | "self_report_arousal";
+type RawConditionRow = {
+  subject_id?: string;
+  room_type?: string;
+  stress_v2?: number | null;
+  arousal_index?: number | null;
+  mean_hr?: number | null;
+  mean_eda?: number | null;
+  rmssd?: number | null;
+  rsa_amplitude?: number | null;
+  valence?: number | null;
+  arousal?: number | null;
+};
+type FactorMetricKey = "stress_v2" | "arousal_index" | "mean_hr" | "mean_eda" | "rmssd" | "rsa_amplitude" | "valence" | "arousal";
+type MetricSpec = {
+  key: FactorMetricKey;
+  aggregateKey?: ConditionMetricKey;
+  label: string;
+  digits: number;
+  color: string;
+  higher: string;
+};
 
 const CHART_W = 1120;
 const CHART_H = 640;
@@ -45,7 +74,29 @@ const AROUSAL_ONLY_CHART_H = 470;
 const AROUSAL_COLOR = "#00C896";
 const STRESS_COLOR = "#E8872A";
 const VALENCE_COLOR = "#5E7CE2";
+const HRV_COLOR = "#A78BFA";
 const MIN_WINDOWS_FOR_INFERENCE = 4;
+const GEOMETRIES = ["Rectilinear", "Curved-walls", "Cloister-vault", "Quasi-geodesic"] as const;
+const CHROMATICITIES = ["High", "Low"] as const;
+const CONDITION_FACTORS: Record<string, { geometry: typeof GEOMETRIES[number]; chromaticity: typeof CHROMATICITIES[number] }> = {
+  A: { geometry: "Rectilinear", chromaticity: "High" },
+  B: { geometry: "Rectilinear", chromaticity: "Low" },
+  C: { geometry: "Curved-walls", chromaticity: "High" },
+  D: { geometry: "Curved-walls", chromaticity: "Low" },
+  E: { geometry: "Cloister-vault", chromaticity: "High" },
+  F: { geometry: "Cloister-vault", chromaticity: "Low" },
+  G: { geometry: "Quasi-geodesic", chromaticity: "High" },
+  H: { geometry: "Quasi-geodesic", chromaticity: "Low" },
+};
+const FACTOR_METRICS: MetricSpec[] = [
+  { key: "mean_hr", aggregateKey: "mean_hr", label: "HR mean", digits: 1, color: AROUSAL_COLOR, higher: "higher cardiac activation" },
+  { key: "stress_v2", aggregateKey: "stress_v2", label: "Stress V2", digits: 3, color: STRESS_COLOR, higher: "higher stress-like activation" },
+  { key: "arousal_index", aggregateKey: "arousal_index", label: "Unified arousal", digits: 3, color: "#4FC3F7", higher: "higher baseline-relative arousal" },
+  { key: "valence", aggregateKey: "self_report_valence", label: "Self-report valence", digits: 2, color: VALENCE_COLOR, higher: "more positive affect" },
+  { key: "arousal", aggregateKey: "self_report_arousal", label: "Self-report arousal", digits: 2, color: "#F5A623", higher: "higher reported arousal" },
+  { key: "rmssd", aggregateKey: "rmssd", label: "HRV RMSSD", digits: 1, color: HRV_COLOR, higher: "higher vagal flexibility" },
+  { key: "rsa_amplitude", aggregateKey: "rsa_amplitude", label: "RSA amp", digits: 1, color: "#9BE7C7", higher: "higher vagal respiratory modulation" },
+];
 
 export const RoomSummaryPage: React.FC = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -126,6 +177,10 @@ export const RoomSummaryPage: React.FC = () => {
               digits={2}
             />
           </div>
+          <SignificanceSummaryPanel session={session} />
+          <FactorGridSection rows={conditionRows} />
+          <MainEffectSection session={session} />
+          <AffectSummarySection session={session} rows={conditionRows} />
           <ConditionAggregateTable rows={conditionRows} />
         </>
       ) : (
@@ -230,6 +285,324 @@ function rankedConditionRows(rows: ConditionAggregateCondition[], metric: Condit
       if (aMean !== bMean) return aMean - bMean;
       return a.condition.localeCompare(b.condition);
     });
+}
+
+function rawConditionRows(session: StoredSession): RawConditionRow[] {
+  return (session.condition_aggregate?.rows ?? [])
+    .map((row) => row as RawConditionRow)
+    .filter((row) => typeof row.subject_id === "string" && typeof row.room_type === "string" && CONDITION_FACTORS[row.room_type]);
+}
+
+function rawValue(row: RawConditionRow, metric: FactorMetricKey): number | null {
+  const value = row[metric];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function metricSpec(key: FactorMetricKey): MetricSpec {
+  return FACTOR_METRICS.find((metric) => metric.key === key) ?? FACTOR_METRICS[0];
+}
+
+function FactorGridSection({ rows }: { rows: ConditionAggregateCondition[] }) {
+  return (
+    <section className="room-summary-section" aria-label="Factorial condition grids">
+      <h2>2 x 4 condition grids</h2>
+      <p>Rows are chromaticity; columns are geometry. Cells show room-type means.</p>
+      <div className="factor-grid-charts">
+        {(["mean_hr", "stress_v2", "valence", "arousal"] as FactorMetricKey[]).map((key) => (
+          <div className="chart-frame" key={key}>
+            <FactorGridChart rows={rows} metric={metricSpec(key)} />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FactorGridChart({ rows, metric }: { rows: ConditionAggregateCondition[]; metric: MetricSpec }) {
+  const aggregateKey = metric.aggregateKey;
+  const cellValues = Object.entries(CONDITION_FACTORS).map(([condition, factors]) => {
+    const row = rows.find((item) => item.condition === condition);
+    const value = row && aggregateKey ? conditionMetric(row, aggregateKey).mean : null;
+    return { condition, ...factors, value };
+  });
+  const values = cellValues.map((cell) => cell.value).filter((value): value is number => value !== null);
+  if (values.length === 0) return <div style={{ color: PALETTE.sub }}>No {metric.label} grid data.</div>;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const w = 520;
+  const h = 276;
+  const padL = 118;
+  const padT = 58;
+  const cellW = 92;
+  const cellH = 70;
+
+  return (
+    <svg width={w} height={h} role="img" aria-label={`${metric.label} 2 by 4 factor grid`}>
+      <rect width={w} height={h} fill={PALETTE.bg} />
+      <text x={18} y={28} fill={PALETTE.text} fontSize="15" fontWeight="800">{metric.label}</text>
+      <text x={18} y={46} fill={PALETTE.sub} fontSize="10">{metric.higher}</text>
+      {GEOMETRIES.map((geometry, index) => (
+        <text key={geometry} x={padL + index * cellW + cellW / 2} y={padT - 12} textAnchor="middle" fill={PALETTE.sub} fontSize="9">
+          {geometry.replace("-walls", "")}
+        </text>
+      ))}
+      {CHROMATICITIES.map((chromaticity, rowIndex) => (
+        <g key={chromaticity}>
+          <text x={padL - 12} y={padT + rowIndex * cellH + cellH / 2 + 4} textAnchor="end" fill={PALETTE.sub} fontSize="11" fontWeight="700">{chromaticity}</text>
+          {GEOMETRIES.map((geometry, colIndex) => {
+            const cell = cellValues.find((item) => item.geometry === geometry && item.chromaticity === chromaticity);
+            const value = cell?.value ?? null;
+            const intensity = value === null || max === min ? 0.45 : 0.18 + 0.72 * ((value - min) / (max - min));
+            const x = padL + colIndex * cellW;
+            const y = padT + rowIndex * cellH;
+            return (
+              <g key={`${geometry}-${chromaticity}`}>
+                <rect x={x + 3} y={y + 3} width={cellW - 6} height={cellH - 6} rx={4} fill={metric.color} opacity={intensity} stroke={PALETTE.grid} />
+                <text x={x + cellW / 2} y={y + 26} textAnchor="middle" fill="#050505" fontSize="16" fontWeight="900">{cell?.condition}</text>
+                <text x={x + cellW / 2} y={y + 47} textAnchor="middle" fill="#050505" fontSize="12" fontWeight="800">
+                  {formatPlain(value, metric.digits)}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      ))}
+      <text x={w - 18} y={h - 12} textAnchor="end" fill={PALETTE.sub} fontSize="9">Darker cells are higher within this metric.</text>
+    </svg>
+  );
+}
+
+function MainEffectSection({ session }: { session: StoredSession }) {
+  const rows = rawConditionRows(session);
+  return (
+    <section className="room-summary-section" aria-label="Main effect plots">
+      <h2>Main-effect plots</h2>
+      <p>Subject-level marginal means collapse across the other factor. Thin lines show paired subject changes where the display has two levels.</p>
+      <div className="factor-grid-charts">
+        {(["mean_hr", "stress_v2", "arousal_index", "valence", "arousal"] as FactorMetricKey[]).map((key) => (
+          <div className="chart-frame" key={`geometry-${key}`}>
+            <MainEffectChart rows={rows} metric={metricSpec(key)} factor="geometry" />
+          </div>
+        ))}
+        {(["mean_hr", "stress_v2", "arousal_index", "valence", "arousal"] as FactorMetricKey[]).map((key) => (
+          <div className="chart-frame" key={`chromaticity-${key}`}>
+            <MainEffectChart rows={rows} metric={metricSpec(key)} factor="chromaticity" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function factorSubjectMeans(rows: RawConditionRow[], metric: FactorMetricKey, factor: "geometry" | "chromaticity") {
+  const levels = factor === "geometry" ? [...GEOMETRIES] : [...CHROMATICITIES];
+  const nested = new Map<string, Map<string, number[]>>();
+  for (const row of rows) {
+    const subject = row.subject_id;
+    const roomType = row.room_type;
+    const value = rawValue(row, metric);
+    if (!subject || !roomType || value === null) continue;
+    const level = CONDITION_FACTORS[roomType]?.[factor];
+    if (!level) continue;
+    if (!nested.has(subject)) nested.set(subject, new Map());
+    const byLevel = nested.get(subject)!;
+    byLevel.set(level, [...(byLevel.get(level) ?? []), value]);
+  }
+  return [...nested.entries()].reduce<Array<{ subject: string; means: Record<string, number> }>>((acc, [subject, byLevel]) => {
+    const means: Record<string, number> = {};
+    for (const level of levels) {
+      const vals = byLevel.get(level) ?? [];
+      if (vals.length === 0) return acc;
+      means[level] = vals.reduce((sum, value) => sum + value, 0) / vals.length;
+    }
+    acc.push({ subject, means });
+    return acc;
+  }, []);
+}
+
+function MainEffectChart({ rows, metric, factor }: { rows: RawConditionRow[]; metric: MetricSpec; factor: "geometry" | "chromaticity" }) {
+  const levels = factor === "geometry" ? [...GEOMETRIES] : [...CHROMATICITIES];
+  const subjectMeans = factorSubjectMeans(rows, metric.key, factor);
+  if (subjectMeans.length === 0) return <div style={{ color: PALETTE.sub }}>No {metric.label} data for {factor}.</div>;
+  const means = levels.map((level) => {
+    const vals = subjectMeans.map((row) => row.means[level]).filter((value) => Number.isFinite(value));
+    return vals.reduce((sum, value) => sum + value, 0) / vals.length;
+  });
+  const all = subjectMeans.flatMap((row) => levels.map((level) => row.means[level]));
+  const min = Math.min(...all);
+  const max = Math.max(...all);
+  const spread = Math.max(0.05, max - min);
+  const minY = min - spread * 0.18;
+  const maxY = max + spread * 0.18;
+  const w = 520;
+  const h = 300;
+  const padL = 58;
+  const padR = 24;
+  const padT = 56;
+  const padB = 56;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const toX = (index: number) => padL + (levels.length === 1 ? plotW / 2 : (plotW * index) / (levels.length - 1));
+  const toYLocal = (value: number) => toY(value, minY, maxY, padT, plotH);
+  const p = factor === "chromaticity" && levels.length === 2 ? pairedPValue(subjectMeans.map((row) => row.means[levels[0]] - row.means[levels[1]])) : null;
+
+  return (
+    <svg width={w} height={h} role="img" aria-label={`${metric.label} ${factor} main effect`}>
+      <rect width={w} height={h} fill={PALETTE.bg} />
+      <text x={18} y={26} fill={PALETTE.text} fontSize="14" fontWeight="800">{metric.label} by {factor}</text>
+      <text x={18} y={44} fill={PALETTE.sub} fontSize="10">n={subjectMeans.length}{p !== null ? ` · paired p=${formatP(p)}` : ""}</text>
+      {chartTicks(minY, maxY, 4).map((tick) => (
+        <g key={tick.toFixed(4)}>
+          <line x1={padL} y1={toYLocal(tick)} x2={w - padR} y2={toYLocal(tick)} stroke={PALETTE.grid} />
+          <text x={padL - 10} y={toYLocal(tick) + 4} textAnchor="end" fill={PALETTE.sub} fontSize="9">{tick.toFixed(metric.digits)}</text>
+        </g>
+      ))}
+      {factor === "chromaticity" && subjectMeans.slice(0, 80).map((row) => (
+        <path key={row.subject} d={`M${toX(0)},${toYLocal(row.means[levels[0]]).toFixed(1)} L${toX(1)},${toYLocal(row.means[levels[1]]).toFixed(1)}`} stroke="#6B6B6B" strokeWidth={0.8} opacity={0.35} />
+      ))}
+      {means.map((mean, index) => (
+        <g key={levels[index]}>
+          <circle cx={toX(index)} cy={toYLocal(mean)} r={7} fill={metric.color} stroke={PALETTE.text} strokeWidth={1} />
+          <text x={toX(index)} y={toYLocal(mean) - 12} textAnchor="middle" fill={metric.color} fontSize="11" fontWeight="800">{formatPlain(mean, metric.digits)}</text>
+          <text x={toX(index)} y={h - 25} textAnchor="middle" fill={PALETTE.text} fontSize="10" fontWeight="700">{shortFactorLabel(levels[index])}</text>
+        </g>
+      ))}
+      <path d={means.map((mean, index) => `${index === 0 ? "M" : "L"}${toX(index).toFixed(1)},${toYLocal(mean).toFixed(1)}`).join(" ")} stroke={metric.color} strokeWidth={1.5} fill="none" />
+    </svg>
+  );
+}
+
+function AffectSummarySection({ session, rows }: { session: StoredSession; rows: ConditionAggregateCondition[] }) {
+  const rawRows = rawConditionRows(session);
+  return (
+    <section className="room-summary-section" aria-label="Affect plots">
+      <h2>Affect-specific plots</h2>
+      <p>Valence and arousal are self-report values from Order &amp; Affect, not inferred from physiology.</p>
+      <div className="factor-grid-charts">
+        <div className="chart-frame"><ConditionAggregateMetricChart rows={rows} metric="self_report_valence" title="Valence by room type" subtitle="Higher values mean more positive reported affect." color={VALENCE_COLOR} digits={2} /></div>
+        <div className="chart-frame"><ConditionAggregateMetricChart rows={rows} metric="self_report_arousal" title="Self-report arousal by room type" subtitle="Higher values mean stronger reported arousal." color="#F5A623" digits={2} /></div>
+        <div className="chart-frame"><MainEffectChart rows={rawRows} metric={metricSpec("valence")} factor="geometry" /></div>
+        <div className="chart-frame"><MainEffectChart rows={rawRows} metric={metricSpec("arousal")} factor="geometry" /></div>
+        <div className="chart-frame"><MainEffectChart rows={rawRows} metric={metricSpec("valence")} factor="chromaticity" /></div>
+        <div className="chart-frame"><MainEffectChart rows={rawRows} metric={metricSpec("arousal")} factor="chromaticity" /></div>
+      </div>
+    </section>
+  );
+}
+
+function SignificanceSummaryPanel({ session }: { session: StoredSession }) {
+  const tests = pairwiseRoomTests(rawConditionRows(session));
+  const uncorrected = tests.filter((test) => test.p < 0.05).sort((a, b) => a.p - b.p).slice(0, 8);
+  const corrected = tests.filter((test) => test.q < 0.05);
+  return (
+    <section className="room-summary-section" aria-label="Significance summary">
+      <h2>Significance summary</h2>
+      <p>Paired room comparisons are computed within subject. FDR correction controls false positives across the tested room-pair contrasts.</p>
+      <div className="significance-kpis">
+        <div><b>{tests.length}</b><span>paired tests</span></div>
+        <div><b>{uncorrected.length}</b><span>uncorrected p &lt; .05 shown</span></div>
+        <div><b>{corrected.length}</b><span>survive FDR</span></div>
+      </div>
+      <div className="interval-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Measure</th>
+              <th>Rooms</th>
+              <th>n</th>
+              <th>Mean difference</th>
+              <th>p</th>
+              <th>FDR q</th>
+              <th>Interpretation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {uncorrected.length === 0 ? (
+              <tr><td colSpan={7}>No uncorrected p &lt; .05 room-pair contrasts.</td></tr>
+            ) : uncorrected.map((test) => (
+              <tr key={`${test.metric}-${test.a}-${test.b}`}>
+                <td>{test.label}</td>
+                <td>{test.a} vs {test.b}</td>
+                <td className="num">{test.n}</td>
+                <td className="num">{formatSigned(test.diff, test.digits)}</td>
+                <td className="num">{formatP(test.p)}</td>
+                <td className="num">{formatP(test.q)}</td>
+                <td>{test.q < 0.05 ? "survives FDR" : "exploratory only"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function pairwiseRoomTests(rows: RawConditionRow[]) {
+  const specs = FACTOR_METRICS.filter((metric) => ["stress_v2", "arousal_index", "mean_hr", "mean_eda", "rmssd", "rsa_amplitude", "valence", "arousal"].includes(metric.key));
+  const tests = specs.flatMap((spec) => {
+    const bySubject = new Map<string, Map<string, number>>();
+    for (const row of rows) {
+      const subject = row.subject_id;
+      const condition = row.room_type;
+      const value = rawValue(row, spec.key);
+      if (!subject || !condition || value === null) continue;
+      if (!bySubject.has(subject)) bySubject.set(subject, new Map());
+      bySubject.get(subject)!.set(condition, value);
+    }
+    const conditions = Object.keys(CONDITION_FACTORS).sort();
+    const metricTests: Array<{ metric: string; label: string; a: string; b: string; n: number; diff: number; p: number; q: number; digits: number }> = [];
+    for (let i = 0; i < conditions.length; i += 1) {
+      for (let j = i + 1; j < conditions.length; j += 1) {
+        const a = conditions[i];
+        const b = conditions[j];
+        const diffs = [...bySubject.values()].reduce<number[]>((acc, values) => {
+          const av = values.get(a);
+          const bv = values.get(b);
+          if (typeof av === "number" && typeof bv === "number") acc.push(bv - av);
+          return acc;
+        }, []);
+        if (diffs.length >= 3) {
+          metricTests.push({
+            metric: spec.key,
+            label: spec.label,
+            a,
+            b,
+            n: diffs.length,
+            diff: diffs.reduce((sum, value) => sum + value, 0) / diffs.length,
+            p: pairedPValue(diffs),
+            q: 1,
+            digits: spec.digits,
+          });
+        }
+      }
+    }
+    return fdrCorrect(metricTests);
+  });
+  return fdrCorrect(tests);
+}
+
+function pairedPValue(diffs: number[]): number {
+  if (diffs.length < 3) return 1;
+  const stats = meanSd(diffs);
+  if (stats.mean === null || stats.sd === null || stats.sd <= 0) return 1;
+  const t = Math.abs(stats.mean / (stats.sd / Math.sqrt(diffs.length)));
+  return Math.max(0, Math.min(1, 2 * (1 - normalCdf(t))));
+}
+
+function fdrCorrect<T extends { p: number; q: number }>(tests: T[]): T[] {
+  const sorted = tests.slice().sort((a, b) => a.p - b.p);
+  let next = 1;
+  for (let i = sorted.length - 1; i >= 0; i -= 1) {
+    const rank = i + 1;
+    const q = Math.min(next, (sorted[i].p * sorted.length) / rank);
+    sorted[i].q = q;
+    next = q;
+  }
+  return tests;
+}
+
+function shortFactorLabel(label: string): string {
+  return label.replace("Rectilinear", "Rect.").replace("Curved-walls", "Curved").replace("Cloister-vault", "Cloister").replace("Quasi-geodesic", "Geodesic");
 }
 
 function exactRoomSummaryRows(session: StoredSession): RoomRow[] {
