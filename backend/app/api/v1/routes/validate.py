@@ -314,15 +314,27 @@ def _validate_markers_from_zip(raw_bytes: bytes, filename: str) -> pd.DataFrame:
 
 @router.post("/validate/csv/order_affect", response_model=CsvValidationResponse)
 async def validate_order_affect_csv_endpoint(file: UploadFile) -> CsvValidationResponse:
-    """Validate an Order & Affect CSV without running the pipeline.
+    """Validate an Order & Affect CSV or ZIP without running the pipeline.
 
     Expected schema: subject_id, room_number, room_type, valence, arousal.
     One row per room per subject.
     """
     from app.services.ingestion.order_affect import validate_order_affect_csv
+    from app.services.ingestion.zip_ingestion import extract_and_classify_zip
 
     try:
-        csv_text = (await file.read()).decode("utf-8", errors="replace")
+        raw_bytes = await file.read()
+        if _is_zip(raw_bytes):
+            contents = extract_and_classify_zip(raw_bytes)
+            if not contents.order_affect_text:
+                raise ValueError(
+                    f"ZIP file '{file.filename or 'upload.zip'}' does not contain recognizable "
+                    "Order & Affect data. Expected columns such as subject_id, room_type, "
+                    "valence, and arousal."
+                )
+            csv_text = contents.order_affect_text
+        else:
+            csv_text = raw_bytes.decode("utf-8", errors="replace")
         info = validate_order_affect_csv(csv_text)
     except ValueError as exc:
         raise HTTPException(

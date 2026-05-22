@@ -302,7 +302,7 @@ export const StartPage: React.FC = () => {
             }
           />
           <DropSlot
-            label="Order & Affect CSV (room order + valence/arousal)"
+            label="Order & Affect CSV/ZIP (room order + valence/arousal)"
             required={false}
             state={orderAffect}
             onFile={(f) => onDropFile("oa", f)}

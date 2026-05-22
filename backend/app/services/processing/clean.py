@@ -81,13 +81,16 @@ def _apply_motion_filter(
 
     work = df.copy()
     magnitude = np.sqrt(work["acc_x"] ** 2 + work["acc_y"] ** 2 + work["acc_z"] ** 2)
+    finite_magnitude = np.isfinite(magnitude)
+    if not bool(finite_magnitude.any()):
+        return work, 0.0
 
     # Baseline: median magnitude (approx 1.0g when sensor is stationary)
-    baseline = float(np.median(magnitude))
+    baseline = float(np.nanmedian(magnitude))
     deviation = np.abs(magnitude - baseline)
 
     # V2.1 FIX: absolute threshold instead of percentile
-    keep = deviation <= threshold_g
+    keep = finite_magnitude & (deviation <= threshold_g)
     removed_ratio = float((~keep).sum() / len(work)) if len(work) else 0.0
 
     return work.loc[keep].copy(), removed_ratio

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import zipfile
 
 from fastapi.testclient import TestClient
 
@@ -120,6 +121,23 @@ def test_validate_markers_csv_reports_event_codes():
     assert body["timestamp_range_ms"]["span_s"] == 1
 
 
+def test_validate_order_affect_accepts_zip():
+    order_affect = b"subject_id,room_number,room_type,valence,arousal\nP01,1,baseline,3.5,2.0\nP01,2,stress,1.5,4.5\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("order_affect.csv", order_affect)
+
+    r = client.post(
+        "/api/v1/validate/csv/order_affect",
+        files={"file": ("order_affect.zip", buf.getvalue(), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["valid"] is True
+    assert body["subject_id_detected"] == "P01"
+    assert body["n_rooms"] == 2
+
+
 def test_analyze_stores_event_marker_timestamps():
     em_bytes, pol_bytes = _synthetic_csvs(90)
     markers = b"session_id,event_code,utc_ms,note\nTEST_MARKERS,recording_start,0,start\nTEST_MARKERS,stress_task_start,30000,task\n"
@@ -142,6 +160,45 @@ def test_analyze_stores_event_marker_timestamps():
     events = detail["markers_summary"]["event_markers"]
     assert events[0]["event_code"] == "recording_start"
     assert events[1]["utc_ms"] == 30000
+
+
+def test_analyze_filters_marker_zip_to_uploaded_data_range():
+    em_bytes, pol_bytes = _synthetic_csvs(180)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "wrong_subject_markers.csv",
+            "session_id,event_code,utc_ms,note\n"
+            "P999,baseline_onset,999000000,start\n"
+            "P999,baseline_offset,999060000,end\n",
+        )
+        zf.writestr(
+            "matching_subject_markers.csv",
+            "session_id,event_code,utc_ms,note\n"
+            "P001,baseline_onset,0,start\n"
+            "P001,baseline_offset,60000,end\n",
+        )
+
+    r = client.post(
+        "/api/v1/analyze",
+        files={
+            "emotibit_file": ("em.csv", em_bytes, "text/csv"),
+            "polar_file": ("pol.csv", pol_bytes, "text/csv"),
+            "markers_file": ("event_markers.zip", buf.getvalue(), "application/zip"),
+        },
+        data={
+            "session_id": "TEST_MARKER_ZIP_FILTER",
+            "subject_id": "P001",
+            "study_id": "STUDY01",
+            "session_date": "2026-05-21",
+        },
+    )
+    assert r.status_code == 200, r.text
+    detail = client.get("/api/v1/sessions/TEST_MARKER_ZIP_FILTER").json()
+    markers = detail["markers_summary"]
+    assert markers["source_n_rows"] == 4
+    assert markers["n_rows"] == 2
+    assert [event["utc_ms"] for event in markers["event_markers"]] == [0, 60000]
 
 
 def test_interval_means_csv_export_contains_rows_and_r2_footer():
@@ -168,6 +225,10 @@ def test_interval_means_csv_export_contains_rows_and_r2_footer():
         },
     )
     assert r.status_code == 200, r.text
+    detail = client.get("/api/v1/sessions/TEST_INTERVAL_EXPORT").json()
+    room_stats = detail["room_stats"]
+    assert room_stats
+    assert {"mean_rpm", "rsa_amplitude", "v2_hr_contribution", "v2_vagal_contribution"}.issubset(room_stats[0])
 
     exported = client.get("/api/v1/sessions/TEST_INTERVAL_EXPORT/export?format=intervals_csv")
     assert exported.status_code == 200, exported.text

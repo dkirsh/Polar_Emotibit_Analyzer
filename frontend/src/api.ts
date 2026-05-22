@@ -263,9 +263,49 @@ export type StoredSession = {
     rmssd: number | null;
     stress_v2: number | null;
     stress_v1: number | null;
+    mean_rpm?: number | null;
+    rsa_amplitude?: number | null;
+    v2_hr_contribution?: number | null;
+    v2_eda_contribution?: number | null;
+    v2_phasic_contribution?: number | null;
+    v2_vagal_contribution?: number | null;
+    v2_sympathovagal_contribution?: number | null;
+    v2_rigidity_contribution?: number | null;
+    v2_rsa_contribution?: number | null;
+    stress_v2_contributions?: Record<string, number | null> | null;
     valence: number | null;
     arousal: number | null;
   }> | null;
+  condition_aggregate?: {
+    kind: string;
+    n_subjects: number;
+    n_rows: number;
+    conditions: Array<{
+      condition: string;
+      n_subjects: number;
+      n_rows: number;
+      visit_counts: Record<string, number>;
+      arousal_index: SummaryMetric;
+      stress_v2: SummaryMetric;
+      mean_hr: SummaryMetric;
+      mean_eda: SummaryMetric;
+      rmssd: SummaryMetric;
+      mean_rpm: SummaryMetric;
+      rsa_amplitude: SummaryMetric;
+      self_report_valence: SummaryMetric;
+      self_report_arousal: SummaryMetric;
+    }>;
+    rows: Array<Record<string, unknown>>;
+    skipped: Array<{ subject_id: string; reason: string }>;
+  } | null;
+};
+
+export type SummaryMetric = {
+  n: number;
+  mean: number | null;
+  sd: number | null;
+  min: number | null;
+  max: number | null;
 };
 
 type ValidateResponse =

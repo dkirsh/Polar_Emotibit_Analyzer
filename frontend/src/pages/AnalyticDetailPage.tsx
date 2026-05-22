@@ -379,13 +379,12 @@ function EventIntervalLegend({ session }: { session: StoredSession }) {
   return (
     <aside className="event-legend" aria-label="Room letter legend">
       <h2>Room key</h2>
-      <p>Letters match the vertical event lines.</p>
+      <p>Letters mark room types from the Order &amp; Affect file.</p>
       <ol>
         {intervals.map((interval) => (
           <li key={interval.key}>
             <span>{interval.letter}</span>
             <b>{interval.label}</b>
-            <em>{formatRelativeRange(session, interval)}</em>
           </li>
         ))}
       </ol>
@@ -394,6 +393,49 @@ function EventIntervalLegend({ session }: { session: StoredSession }) {
 }
 
 function EventIntervalTable({ session }: { session: StoredSession }) {
+  const conditionRows = conditionTableRows(session);
+  if (conditionRows.length > 0) {
+    return (
+      <section className="interval-summary" aria-label="Room type means table">
+        <h2>Room type means</h2>
+        <div className="interval-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Room type</th>
+                <th>Arousal score</th>
+                <th>Main driver</th>
+                <th>HR mean</th>
+                <th>HR SD</th>
+                <th>EDA mean</th>
+                <th>Stress v2</th>
+                <th>Resp. rate</th>
+                <th>HRV RMSSD</th>
+                <th>RSA amp.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {conditionRows.map((row) => (
+                <tr key={row.room.room_type}>
+                  <td><span className="interval-letter">{row.room.room_type}</span></td>
+                  <td className="num">{row.score.toFixed(3)}</td>
+                  <td>{exactDominantRoomContribution(row.room)?.label ?? "-"}</td>
+                  <td className="num">{fmt(row.room.mean_hr, 1)}</td>
+                  <td className="num">{fmt(row.room.sd_hr, 1)}</td>
+                  <td className="num">{fmt(row.room.mean_eda, 2)}</td>
+                  <td className="num">{fmt(row.room.stress_v2, 3)}</td>
+                  <td className="num">{fmt(row.room.mean_rpm, 1)}</td>
+                  <td className="num">{fmt(row.room.rmssd, 1)}</td>
+                  <td className="num">{fmt(row.room.rsa_amplitude, 1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    );
+  }
+
   const intervals = sessionEventIntervals(session);
   const ts = session.extended?.cleaned_timeseries ?? [];
   if (intervals.length === 0 || ts.length === 0) return null;
@@ -407,7 +449,6 @@ function EventIntervalTable({ session }: { session: StoredSession }) {
             <tr>
               <th>Key</th>
               <th>Interval</th>
-              <th>Seconds</th>
               <th>Arousal</th>
               <th>Main driver</th>
               <th>HR mean</th>
@@ -415,7 +456,7 @@ function EventIntervalTable({ session }: { session: StoredSession }) {
               <th>EDA mean</th>
               <th>Stress v2</th>
               <th>Resp. rate</th>
-              <th>RMSSD</th>
+              <th>HRV RMSSD</th>
               <th>RSA amp.</th>
             </tr>
           </thead>
@@ -424,7 +465,6 @@ function EventIntervalTable({ session }: { session: StoredSession }) {
               <tr key={row.interval.key}>
                 <td><span className="interval-letter">{row.interval.letter}</span></td>
                 <td>{row.interval.label}</td>
-                <td className="num">{formatRelativeRange(session, row.interval)}</td>
                 <td className="num">{fmtSigned(row.arousal?.mean, 3)}</td>
                 <td>{row.dominantDriver?.label ?? "-"}</td>
                 <td className="num">{fmt(row.hr?.mean, 1)}</td>
@@ -446,6 +486,8 @@ function EventIntervalTable({ session }: { session: StoredSession }) {
 function intervalStats(session: StoredSession, interval: EventInterval) {
   const ts = session.extended?.cleaned_timeseries ?? [];
   const windowed = session.extended?.windowed;
+  const exact = roomStatForInterval(session, interval);
+  const baselineStress = exactRoomBaselineStress(session);
   const points = ts.filter((p) => {
     const t = p.timestamp_ms;
     return typeof t === "number" && t >= interval.onsetMs && t <= interval.offsetMs;
@@ -457,23 +499,116 @@ function intervalStats(session: StoredSession, interval: EventInterval) {
     .map((t, i) => (t >= onsetS && t <= offsetS ? i : -1))
     .filter((i) => i >= 0) ?? [];
   const dominantDriver = dominantWindowContribution(windowed, windowIndexes);
+  const exactArousal = exact?.stress_v2 != null && baselineStress != null
+    ? clamp(2 * (exact.stress_v2 - baselineStress), -1, 1)
+    : null;
 
   return {
     interval,
-    hr: numberStats(points.map((p) => p.hr_bpm)),
-    eda: numberStats(points.map((p) => p.eda_us)),
+    hr: exact ? scalarStats(exact.mean_hr, exact.sd_hr) : numberStats(points.map((p) => p.hr_bpm)),
+    eda: exact ? scalarStats(exact.mean_eda, exact.sd_eda) : numberStats(points.map((p) => p.eda_us)),
     stress: numberStats(windowIndexes.map((i) => windowed?.stress[i])),
-    stressV2: numberStats(windowIndexes.map((i) => windowed?.stress_v2?.[i])),
-    arousal: numberStats(windowIndexes.map((i) => windowed?.arousal_index?.[i])),
-    rpm: numberStats(windowIndexes.map((i) => windowed?.mean_rpm[i])),
-    rmssd: numberStats(windowIndexes.map((i) => windowed?.rmssd[i])),
-    rsa: numberStats(windowIndexes.map((i) => windowed?.rsa_amplitude[i])),
-    dominantDriver,
+    stressV2: exact ? scalarStats(exact.stress_v2) : numberStats(windowIndexes.map((i) => windowed?.stress_v2?.[i])),
+    arousal: exactArousal != null ? scalarStats(exactArousal) : numberStats(windowIndexes.map((i) => windowed?.arousal_index?.[i])),
+    rpm: exact ? scalarStats(exact.mean_rpm) : numberStats(windowIndexes.map((i) => windowed?.mean_rpm[i])),
+    rmssd: exact ? scalarStats(exact.rmssd) : numberStats(windowIndexes.map((i) => windowed?.rmssd[i])),
+    rsa: exact ? scalarStats(exact.rsa_amplitude) : numberStats(windowIndexes.map((i) => windowed?.rsa_amplitude[i])),
+    dominantDriver: exactDominantRoomContribution(exact) ?? dominantDriver,
   };
 }
 
 function allIntervalStats(session: StoredSession) {
   return sessionEventIntervals(session).map((interval) => intervalStats(session, interval));
+}
+
+function conditionTableRows(session: StoredSession): Array<{
+  room: NonNullable<StoredSession["room_stats"]>[number];
+  score: number;
+}> {
+  const rooms = (session.room_stats ?? [])
+    .filter((row) => /^room\d+$/i.test(row.room_key) && row.room_type)
+    .slice();
+  return rooms
+    .map((room) => ({ room, score: hrEdaArousalScore(room, rooms) }))
+    .sort((a, b) => {
+      const aStress = typeof a.room.stress_v2 === "number" && Number.isFinite(a.room.stress_v2) ? a.room.stress_v2 : Infinity;
+      const bStress = typeof b.room.stress_v2 === "number" && Number.isFinite(b.room.stress_v2) ? b.room.stress_v2 : Infinity;
+      if (aStress !== bStress) return aStress - bStress;
+      return a.room.room_type.localeCompare(b.room.room_type);
+    });
+}
+
+function hrEdaArousalScore(
+  row: NonNullable<StoredSession["room_stats"]>[number],
+  rows: Array<NonNullable<StoredSession["room_stats"]>[number]>,
+): number {
+  const hrVals = rows.map((r) => r.mean_hr).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  const edaVals = rows.map((r) => r.mean_eda).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  const hr = normalizeRoomMetric(row.mean_hr, hrVals);
+  const eda = normalizeRoomMetric(row.mean_eda, edaVals);
+  if (hr === null && eda === null) return 0;
+  if (hr === null) return eda ?? 0;
+  if (eda === null) return hr;
+  return 0.5 * hr + 0.5 * eda;
+}
+
+function normalizeRoomMetric(value: number | null | undefined, values: number[]): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || values.length === 0) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return 0.5;
+  return (value - min) / (max - min);
+}
+
+function roomStatForInterval(session: StoredSession, interval: EventInterval) {
+  const stats = session.room_stats ?? [];
+  return stats.find((row) => (
+    row.room_key?.toLowerCase() === interval.key.toLowerCase() ||
+    (row.onset_ms === interval.onsetMs && row.offset_ms === interval.offsetMs)
+  )) ?? null;
+}
+
+function exactRoomBaselineStress(session: StoredSession): number | null {
+  const baseline = (session.room_stats ?? []).find((row) => row.room_key?.toLowerCase() === "baseline");
+  return typeof baseline?.stress_v2 === "number" && Number.isFinite(baseline.stress_v2)
+    ? baseline.stress_v2
+    : null;
+}
+
+function scalarStats(mean: number | null | undefined, sd?: number | null | undefined) {
+  if (typeof mean !== "number" || !Number.isFinite(mean)) return null;
+  return {
+    n: 1,
+    mean,
+    sd: typeof sd === "number" && Number.isFinite(sd) ? sd : 0,
+    min: mean,
+    max: mean,
+  };
+}
+
+function exactDominantRoomContribution(
+  exact: NonNullable<StoredSession["room_stats"]>[number] | null,
+) {
+  if (!exact) return null;
+  const channels = [
+    { key: "v2_hr_contribution", label: "HR" },
+    { key: "v2_eda_contribution", label: "EDA tonic" },
+    { key: "v2_phasic_contribution", label: "EDA phasic" },
+    { key: "v2_vagal_contribution", label: "HRV vagal deficit" },
+    { key: "v2_sympathovagal_contribution", label: "LF_nu balance" },
+    { key: "v2_rigidity_contribution", label: "SD1/SD2 rigidity" },
+    { key: "v2_rsa_contribution", label: "RSA deficit" },
+  ] as const;
+  const scores = channels
+    .reduce<Array<{ key: string; label: string; mean: number }>>((acc, channel) => {
+      const mean = exact[channel.key];
+      if (typeof mean === "number" && Number.isFinite(mean)) {
+        acc.push({ key: channel.key, label: channel.label, mean });
+      }
+      return acc;
+    }, [])
+    .sort((a, b) => b.mean - a.mean);
+  return scores[0] ?? null;
 }
 
 function numberStats(values: Array<number | null | undefined>) {
@@ -492,11 +627,8 @@ function numberStats(values: Array<number | null | undefined>) {
   };
 }
 
-function formatRelativeRange(session: StoredSession, interval: EventInterval): string {
-  const origin = sessionTimeOriginMs(session);
-  const start = origin == null ? interval.onsetMs / 1000 : (interval.onsetMs - origin) / 1000;
-  const end = origin == null ? interval.offsetMs / 1000 : (interval.offsetMs - origin) / 1000;
-  return `${start.toFixed(0)}-${end.toFixed(0)}s`;
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function sessionTimeOriginMs(session: StoredSession): number | null {
@@ -784,7 +916,7 @@ function dominantWindowContribution(
     { key: "v2_hr_contribution", label: "HR" },
     { key: "v2_eda_contribution", label: "EDA tonic" },
     { key: "v2_phasic_contribution", label: "EDA phasic" },
-    { key: "v2_vagal_contribution", label: "vagal deficit" },
+    { key: "v2_vagal_contribution", label: "HRV vagal deficit" },
     { key: "v2_sympathovagal_contribution", label: "LF_nu balance" },
     { key: "v2_rigidity_contribution", label: "SD1/SD2 rigidity" },
     { key: "v2_rsa_contribution", label: "RSA deficit" },
@@ -863,7 +995,7 @@ function howToReadForAnalytic(a: AnalyticEntry, session: StoredSession): string 
   if (!showsIntervalArousal(a)) return a.howToRead;
   const rows = allIntervalStats(session).filter((row) => row.interval.key.toLowerCase() !== "baseline");
   if (rows.length === 0) return a.howToRead;
-  return `${a.howToRead} Then read the room table in two passes: first compare the arousal column against zero, which is the participant's own baseline; then read the main-driver column to see whether the rise comes chiefly from heart rate, electrodermal activity, vagal deficit, LF_nu balance, rigidity, or RSA deficit.`;
+  return `${a.howToRead} Then read the room table in two passes: first compare the arousal column against zero, which is the participant's own baseline; then read the main-driver column to see whether the rise comes chiefly from heart rate, electrodermal activity, HRV vagal deficit, LF_nu balance, rigidity, or RSA deficit.`;
 }
 
 function architecturalMeaningForAnalytic(a: AnalyticEntry, session: StoredSession): string {

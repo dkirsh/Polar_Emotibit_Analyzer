@@ -279,9 +279,11 @@ async def analyze(
     # the markers file is parsed and stored so the response can cite it but
     # the pipeline here runs whole-session.
     markers_summary: Optional[dict[str, Any]] = None
+    mk_raw_for_aggregate: bytes | None = None
     if markers_file is not None:
         try:
             mk_raw = await markers_file.read()
+            mk_raw_for_aggregate = mk_raw
             if _is_zip(mk_raw):
                 import zipfile as _zf
                 mk_frames = []
@@ -415,6 +417,7 @@ async def analyze(
                     _diag_mk_min - _c_min,
                     (_diag_mk_min - _c_min) / 1000.0,
                 )
+            markers_summary = _filter_markers_to_data_range(markers_summary, _c_min, _c_max)
 
         # Compute session-level EDR for the decomposition
         session_edr = compute_edr(cleaned)
@@ -562,10 +565,21 @@ async def analyze(
 
     # Parse Order & Affect file if provided
     order_affect_data: Optional[dict[str, Any]] = None
+    oa_raw_for_aggregate: bytes | None = None
     if order_affect_file is not None:
         try:
             from app.services.ingestion.order_affect import parse_order_affect_csv
-            oa_text = (await order_affect_file.read()).decode("utf-8", errors="replace")
+            from app.services.ingestion.zip_ingestion import extract_and_classify_zip
+
+            oa_raw = await order_affect_file.read()
+            oa_raw_for_aggregate = oa_raw
+            if _is_zip(oa_raw):
+                contents = extract_and_classify_zip(oa_raw)
+                if not contents.order_affect_text:
+                    raise ValueError("ZIP does not contain recognizable Order & Affect data.")
+                oa_text = contents.order_affect_text
+            else:
+                oa_text = oa_raw.decode("utf-8", errors="replace")
             oa_parsed = parse_order_affect_csv(oa_text)
             order_affect_data = oa_parsed.to_dict()
         except Exception:  # noqa: BLE001
@@ -593,6 +607,19 @@ async def analyze(
             log.warning("Room stats computation failed: %s", exc)
             room_stats = None
 
+    condition_aggregate: Optional[dict[str, Any]] = None
+    if mk_raw_for_aggregate is not None and oa_raw_for_aggregate is not None:
+        try:
+            condition_aggregate = _condition_aggregate_from_zip_uploads(
+                em_raw,
+                pol_raw,
+                mk_raw_for_aggregate,
+                oa_raw_for_aggregate,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Condition aggregate computation failed: %s", exc)
+            condition_aggregate = None
+
     # Persist in the in-process store keyed by session_id (latest-wins).
     analysis_id = str(uuid.uuid4())
     stored = {
@@ -609,6 +636,7 @@ async def analyze(
         "extended": extended,
         "order_affect": order_affect_data,
         "room_stats": room_stats,
+        "condition_aggregate": condition_aggregate,
     }
     _SESSION_STORE[session_id] = stored
     _persist_store()
@@ -651,6 +679,216 @@ def _baseline_window_stress_v2(
     if not fallback:
         return None
     return float(sum(fallback) / len(fallback))
+
+
+def _filter_markers_to_data_range(
+    markers_summary: Optional[dict[str, Any]],
+    data_min_ms: int,
+    data_max_ms: int,
+) -> Optional[dict[str, Any]]:
+    """Keep only marker events whose timestamps overlap the analyzed data."""
+    if not markers_summary or not isinstance(markers_summary.get("event_markers"), list):
+        return markers_summary
+
+    kept: list[dict[str, Any]] = []
+    for marker in markers_summary["event_markers"]:
+        try:
+            utc_ms = int(marker.get("utc_ms"))
+        except (TypeError, ValueError):
+            continue
+        if data_min_ms <= utc_ms <= data_max_ms:
+            kept.append(marker)
+
+    if not kept:
+        return markers_summary
+
+    filtered = dict(markers_summary)
+    filtered["event_markers"] = kept
+    filtered["codes"] = sorted({str(marker.get("event_code", "")) for marker in kept})
+    filtered["n_rows"] = len(kept)
+    filtered["source_n_rows"] = markers_summary.get("n_rows", len(markers_summary["event_markers"]))
+    return filtered
+
+
+def _condition_aggregate_from_zip_uploads(
+    emotibit_raw: bytes,
+    polar_raw: bytes,
+    markers_raw: bytes,
+    order_affect_raw: bytes,
+) -> dict[str, Any] | None:
+    """Compute Latin-square condition aggregates from matched subject ZIPs."""
+    if not (_is_zip_bytes(emotibit_raw) and _is_zip_bytes(polar_raw) and _is_zip_bytes(markers_raw) and _is_zip_bytes(order_affect_raw)):
+        return None
+
+    from app.services.ingestion.order_affect import parse_order_affect_csv
+    from app.services.processing.room_analysis import compute_room_stats
+    import re
+    import zipfile
+
+    def subject_from_name(name: str) -> str | None:
+        match = re.search(r"p(\d{3})", name.lower())
+        return f"p{match.group(1)}" if match else None
+
+    def csv_texts_by_subject(raw: bytes) -> dict[str, str]:
+        out: dict[str, str] = {}
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                basename = info.filename.split("/")[-1]
+                if not basename.lower().endswith(".csv") or basename.startswith(".") or basename.startswith("__"):
+                    continue
+                subject = subject_from_name(basename)
+                if subject is None:
+                    continue
+                out[subject] = zf.read(info.filename).decode("utf-8", errors="replace")
+        return out
+
+    em_texts = csv_texts_by_subject(emotibit_raw)
+    pol_texts = csv_texts_by_subject(polar_raw)
+    marker_texts = csv_texts_by_subject(markers_raw)
+    order_texts = csv_texts_by_subject(order_affect_raw)
+
+    subjects = sorted(set(em_texts) & set(pol_texts) & set(marker_texts) & set(order_texts))
+    rows: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for subject in subjects:
+        try:
+            em_df_s = parse_emotibit_csv(em_texts[subject])
+            pol_df_s = parse_polar_csv(pol_texts[subject])
+            markers_df = pd.read_csv(io.StringIO(marker_texts[subject]))
+            markers = [
+                {
+                    "event_code": str(row.get("event_code", "")),
+                    "utc_ms": int(row.get("utc_ms")),
+                    "note": str(row.get("note", "")) if "note" in row and pd.notna(row.get("note")) else "",
+                }
+                for row in markers_df.to_dict(orient="records")
+                if pd.notna(row.get("utc_ms"))
+            ]
+            order_data = parse_order_affect_csv(order_texts[subject]).to_dict()
+
+            drift_model = estimate_piecewise_drift(
+                source_ts=pol_df_s["timestamp_ms"].astype(int).tolist(),
+                reference_ts=em_df_s["timestamp_ms"].astype(int).tolist(),
+            )
+            corrected = pol_df_s.copy()
+            corrected["timestamp_ms"] = apply_piecewise_drift(
+                corrected["timestamp_ms"].astype(int).tolist(),
+                drift_model,
+            )
+            synced = synchronize_signals(em_df_s, corrected)
+            cleaned_s, _ = clean_signals(synced)
+            stats = compute_room_stats(cleaned_s, markers, order_data)
+            room_stats_present = any(str(row.get("room_key", "")).lower().startswith("room") for row in stats)
+            if not room_stats_present and _markers_overlap_dataframe(markers, pol_df_s):
+                stats = compute_room_stats(_polar_room_dataframe(pol_df_s), markers, order_data)
+                for stat in stats:
+                    stat["data_mode"] = "polar_only"
+            baseline = next((row for row in stats if str(row.get("room_key", "")).lower() == "baseline"), None)
+            baseline_stress = baseline.get("stress_v2") if isinstance(baseline, dict) else None
+            for stat in stats:
+                if not str(stat.get("room_key", "")).lower().startswith("room"):
+                    continue
+                row = dict(stat)
+                row["subject_id"] = subject
+                row["data_mode"] = row.get("data_mode", "synchronized_multimodal")
+                row["visit_number"] = row.get("room_number")
+                if isinstance(row.get("stress_v2"), (int, float)) and isinstance(baseline_stress, (int, float)):
+                    row["arousal_index"] = max(-1.0, min(1.0, 2.0 * (float(row["stress_v2"]) - float(baseline_stress))))
+                else:
+                    row["arousal_index"] = None
+                rows.append(row)
+        except Exception as exc:  # noqa: BLE001
+            skipped.append({"subject_id": subject, "reason": f"{exc.__class__.__name__}: {exc}"})
+
+    if not rows:
+        return None
+
+    metrics = {
+        "arousal_index": "arousal_index",
+        "stress_v2": "stress_v2",
+        "mean_hr": "mean_hr",
+        "mean_eda": "mean_eda",
+        "rmssd": "rmssd",
+        "mean_rpm": "mean_rpm",
+        "rsa_amplitude": "rsa_amplitude",
+        "self_report_valence": "valence",
+        "self_report_arousal": "arousal",
+    }
+    conditions: list[dict[str, Any]] = []
+    for condition in sorted({str(row.get("room_type", "")) for row in rows if row.get("room_type")}):
+        cond_rows = [row for row in rows if str(row.get("room_type", "")) == condition]
+        summary: dict[str, Any] = {"condition": condition, "n_subjects": len({row["subject_id"] for row in cond_rows}), "n_rows": len(cond_rows)}
+        for output_key, row_key in metrics.items():
+            vals = [float(row[row_key]) for row in cond_rows if isinstance(row.get(row_key), (int, float))]
+            summary[output_key] = _summary_stats(vals)
+        visit_counts: dict[str, int] = {}
+        for row in cond_rows:
+            visit = str(row.get("visit_number"))
+            visit_counts[visit] = visit_counts.get(visit, 0) + 1
+        summary["visit_counts"] = visit_counts
+        conditions.append(summary)
+
+    return {
+        "kind": "latin_square_condition_aggregate",
+        "n_subjects": len({row["subject_id"] for row in rows}),
+        "n_rows": len(rows),
+        "conditions": conditions,
+        "rows": rows,
+        "skipped": skipped,
+    }
+
+
+def _markers_overlap_dataframe(markers: list[dict[str, Any]], df: pd.DataFrame) -> bool:
+    if df.empty or "timestamp_ms" not in df.columns:
+        return False
+    times = pd.to_numeric(df["timestamp_ms"], errors="coerce").dropna()
+    marker_times = [
+        int(marker["utc_ms"])
+        for marker in markers
+        if isinstance(marker.get("utc_ms"), (int, float)) or str(marker.get("utc_ms", "")).isdigit()
+    ]
+    if times.empty or not marker_times:
+        return False
+    data_min = float(times.min())
+    data_max = float(times.max())
+    return max(marker_times) >= data_min and min(marker_times) <= data_max
+
+
+def _polar_room_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a light-cleaned Polar-only frame for room HR/HRV/RSA stats."""
+    work = df.copy()
+    if "timestamp_ms" in work.columns:
+        work["timestamp_ms"] = pd.to_numeric(work["timestamp_ms"], errors="coerce")
+    if "hr_bpm" in work.columns:
+        work["hr_bpm"] = pd.to_numeric(work["hr_bpm"], errors="coerce")
+        work = work[(work["hr_bpm"] >= 35) & (work["hr_bpm"] <= 220)]
+    if "rr_ms" in work.columns:
+        work["rr_ms"] = pd.to_numeric(work["rr_ms"], errors="coerce")
+        rr_valid = work["rr_ms"].isna() | ((work["rr_ms"] >= 300) & (work["rr_ms"] <= 2000))
+        work = work[rr_valid]
+    return work.dropna(subset=["timestamp_ms"]).sort_values("timestamp_ms").reset_index(drop=True)
+
+
+def _is_zip_bytes(raw: bytes) -> bool:
+    return raw[:4] == b"PK\x03\x04" or raw[:4] == b"PK\x05\x06"
+
+
+def _summary_stats(values: list[float]) -> dict[str, float | int | None]:
+    if not values:
+        return {"n": 0, "mean": None, "sd": None, "min": None, "max": None}
+    mean = sum(values) / len(values)
+    sd = None
+    if len(values) > 1:
+        sd = (sum((value - mean) ** 2 for value in values) / (len(values) - 1)) ** 0.5
+    return {
+        "n": len(values),
+        "mean": round(float(mean), 4),
+        "sd": round(float(sd), 4) if sd is not None else None,
+        "min": round(float(min(values)), 4),
+        "max": round(float(max(values)), 4),
+    }
 
 
 def _stress_v2_components(

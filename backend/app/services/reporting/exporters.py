@@ -188,6 +188,10 @@ def export_interval_means_to_csv(session_record: dict[str, Any]) -> bytes:
         else:
             onset_s = (onset_ms - origin_ms) / 1000.0
             offset_s = (offset_ms - origin_ms) / 1000.0
+        window_indexes = [
+            i for i, t_s in enumerate(windowed.get("t_s") or [])
+            if _is_finite_number(t_s) and onset_s <= float(t_s) <= offset_s
+        ]
 
         # Compute EXACT features for the interval bounds rather than averaging rolling windows.
         if len(points) >= 2:

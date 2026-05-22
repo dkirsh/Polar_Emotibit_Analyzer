@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getSession, StoredSession } from "../api";
+import { getSession, StoredSession, SummaryMetric } from "../api";
 import { PALETTE } from "../analytics/chartPalette";
 import { EventInterval, sessionEventIntervals } from "../analytics/eventIntervals";
 
@@ -36,11 +36,15 @@ type ArousalPairwiseComparison = {
   d: number | null;
 };
 
+type ConditionAggregateCondition = NonNullable<StoredSession["condition_aggregate"]>["conditions"][number];
+type ConditionMetricKey = "arousal_index" | "stress_v2" | "self_report_valence" | "self_report_arousal";
+
 const CHART_W = 1120;
 const CHART_H = 640;
 const AROUSAL_ONLY_CHART_H = 470;
 const AROUSAL_COLOR = "#00C896";
 const STRESS_COLOR = "#E8872A";
+const VALENCE_COLOR = "#5E7CE2";
 const MIN_WINDOWS_FOR_INFERENCE = 4;
 
 export const RoomSummaryPage: React.FC = () => {
@@ -58,6 +62,7 @@ export const RoomSummaryPage: React.FC = () => {
   const comparisons = useMemo(() => significantRoomDifferences(rows), [rows]);
   const rankedRows = useMemo(() => rankedArousalRows(rows), [rows]);
   const adjacentArousalComparisons = useMemo(() => adjacentRankedArousalComparisons(rankedRows), [rankedRows]);
+  const conditionRows = session?.condition_aggregate?.conditions ?? [];
 
   if (error) return (
     <main className="page">
@@ -83,22 +88,68 @@ export const RoomSummaryPage: React.FC = () => {
           {session.operator ? ` · ${session.operator}` : ""}
         </div>
         <div className="meta-line">
-          Mean arousal and Stress V2 by room marker · p and d compare room pairs
+          Room type aggregates from the Latin-square order file
         </div>
       </div>
 
-      <div className="chart-frame large room-summary-chart-spacer">
-        <RankedArousalChart ranked={rankedRows} adjacentComparisons={adjacentArousalComparisons} />
-      </div>
-      <ArousalRankTable ranked={rankedRows} adjacentComparisons={adjacentArousalComparisons} />
-      <div className="chart-frame large room-summary-chart-spacer">
-        <RoomSummaryChart rows={rows} comparisons={comparisons} />
-      </div>
+      {conditionRows.length > 0 ? (
+        <>
+          <div className="chart-frame large room-summary-chart-spacer">
+            <ConditionAggregateMetricChart
+              rows={conditionRows}
+              metric="arousal_index"
+              title="Unified physiological arousal by room type"
+              subtitle="Stress V2 arousal index: HR, EDA tonic/phasic, HRV vagal deficit, respiration/RSA, and balance terms where available. Higher is more aroused."
+              color={AROUSAL_COLOR}
+              domainZero
+              digits={3}
+            />
+          </div>
+          <div className="chart-frame large room-summary-chart-spacer">
+            <ConditionAggregateMetricChart
+              rows={conditionRows}
+              metric="stress_v2"
+              title="Stress V2 by room type"
+              subtitle="Raw Stress V2 composite by room type. Higher means more stress-like physiological activation on the 0-to-1 heuristic scale."
+              color={STRESS_COLOR}
+              domainZero
+              digits={3}
+            />
+          </div>
+          <div className="chart-frame large room-summary-chart-spacer">
+            <ConditionAggregateMetricChart
+              rows={conditionRows}
+              metric="self_report_valence"
+              title="Self-report valence by room type"
+              subtitle="Valence is read from the Order & Affect files. Higher means more positive affect."
+              color={VALENCE_COLOR}
+              digits={2}
+            />
+          </div>
+          <ConditionAggregateTable rows={conditionRows} />
+        </>
+      ) : (
+        <>
+          <div className="chart-frame large room-summary-chart-spacer">
+            <RankedArousalChart ranked={rankedRows} adjacentComparisons={adjacentArousalComparisons} />
+          </div>
+          <ArousalRankTable ranked={rankedRows} adjacentComparisons={adjacentArousalComparisons} />
+          <div className="chart-frame large room-summary-chart-spacer">
+            <RoomSummaryChart rows={rows} comparisons={comparisons} />
+          </div>
+        </>
+      )}
     </main>
   );
 };
 
 function roomSummaryRows(session: StoredSession): RoomRow[] {
+  const aggregateRows = conditionAggregateRows(session);
+  if (aggregateRows.length > 0) return aggregateRows;
+
+  const exactRows = exactRoomSummaryRows(session);
+  if (exactRows.length > 0) return exactRows;
+
   const intervals = sessionEventIntervals(session);
   const roomIntervals = intervals.filter((i) => /^room\d*$/i.test(i.key));
   const selected = roomIntervals.length > 0
@@ -124,6 +175,107 @@ function roomSummaryRows(session: StoredSession): RoomRow[] {
       stress: metricForInterval(t, stress, lo, hi),
     };
   });
+}
+
+function conditionAggregateRows(session: StoredSession): RoomRow[] {
+  const aggregate = session.condition_aggregate;
+  if (!aggregate?.conditions?.length) return [];
+  return aggregate.conditions
+    .slice()
+    .sort((a, b) => a.condition.localeCompare(b.condition))
+    .map((condition) => {
+      const interval: EventInterval = {
+        key: condition.condition,
+        letter: condition.condition,
+        label: `Condition ${condition.condition}`,
+        onsetCode: "",
+        offsetCode: "",
+        onsetMs: 0,
+        offsetMs: 0,
+      };
+      return {
+        interval,
+        seconds: 25,
+        arousal: summaryMetric(condition.arousal_index),
+        stress: summaryMetric(condition.stress_v2),
+      };
+    });
+}
+
+function summaryMetric(metric: { n: number; mean: number | null; sd: number | null } | null | undefined): RoomMetric {
+  return {
+    n: metric?.n ?? 0,
+    mean: metric?.mean ?? null,
+    sd: metric?.sd ?? null,
+    values: [],
+  };
+}
+
+function conditionMetric(row: ConditionAggregateCondition, metric: ConditionMetricKey): SummaryMetric {
+  const value = row[metric] as SummaryMetric | undefined;
+  return value ?? emptySummaryMetric();
+}
+
+function emptySummaryMetric(): SummaryMetric {
+  return { n: 0, mean: null, sd: null, min: null, max: null };
+}
+
+function rankedConditionRows(rows: ConditionAggregateCondition[], metric: ConditionMetricKey): ConditionAggregateCondition[] {
+  return rows
+    .filter((row) => conditionMetric(row, metric).mean !== null)
+    .slice()
+    .sort((a, b) => {
+      const aMean = conditionMetric(a, metric).mean ?? Infinity;
+      const bMean = conditionMetric(b, metric).mean ?? Infinity;
+      if (aMean !== bMean) return aMean - bMean;
+      return a.condition.localeCompare(b.condition);
+    });
+}
+
+function exactRoomSummaryRows(session: StoredSession): RoomRow[] {
+  const stats = (session.room_stats ?? []).filter((row) => /^room\d+$/i.test(row.room_key));
+  const baseline = (session.room_stats ?? []).find((row) => row.room_key?.toLowerCase() === "baseline");
+  const baselineStress = typeof baseline?.stress_v2 === "number" && Number.isFinite(baseline.stress_v2)
+    ? baseline.stress_v2
+    : null;
+  if (stats.length === 0 || baselineStress === null) return [];
+
+  return stats
+    .slice()
+    .sort((a, b) => a.onset_ms - b.onset_ms)
+    .map((row) => {
+      const visitLabel = `visit ${row.room_number}`;
+      const condition = row.room_type && row.room_type !== row.room_key ? row.room_type : row.room_key;
+      const label = `${condition} (${visitLabel})`;
+      const arousal = typeof row.stress_v2 === "number" && Number.isFinite(row.stress_v2)
+        ? clamp(2 * (row.stress_v2 - baselineStress), -1, 1)
+        : null;
+      const interval: EventInterval = {
+        key: row.room_key,
+        letter: condition,
+        label,
+        onsetCode: `${row.room_key}_onset`,
+        offsetCode: `${row.room_key}_offset`,
+        onsetMs: row.onset_ms,
+        offsetMs: row.offset_ms,
+      };
+      return {
+        interval,
+        seconds: row.duration_s,
+        arousal: exactMetric(arousal, row.sample_count),
+        stress: exactMetric(row.stress_v2, row.sample_count),
+      };
+    });
+}
+
+function exactMetric(value: number | null | undefined, n: number): RoomMetric {
+  return typeof value === "number" && Number.isFinite(value)
+    ? { n, mean: value, sd: null, values: [value] }
+    : { n: 0, mean: null, sd: null, values: [] };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function sessionStartMs(session: StoredSession): number | null {
@@ -235,6 +387,166 @@ function erf(x: number): number {
   return sign * y;
 }
 
+function ConditionAggregateMetricChart({
+  rows,
+  metric,
+  title,
+  subtitle,
+  color,
+  domainZero = false,
+  digits,
+}: {
+  rows: ConditionAggregateCondition[];
+  metric: ConditionMetricKey;
+  title: string;
+  subtitle: string;
+  color: string;
+  domainZero?: boolean;
+  digits: number;
+}) {
+  const ranked = rankedConditionRows(rows, metric);
+  if (ranked.length === 0) return <div style={{ color: PALETTE.sub }}>No condition-level values available for this measure.</div>;
+
+  const padL = 78;
+  const padR = 40;
+  const padT = 82;
+  const padB = 82;
+  const plotW = CHART_W - padL - padR;
+  const plotH = AROUSAL_ONLY_CHART_H - padT - padB;
+  const means = ranked
+    .map((row) => conditionMetric(row, metric).mean)
+    .filter((value): value is number => value !== null);
+  const minValue = Math.min(...ranked.map((row) => {
+    const rowMetric = conditionMetric(row, metric);
+    return rowMetric.sd !== null && rowMetric.mean !== null ? rowMetric.mean - rowMetric.sd : rowMetric.mean ?? Infinity;
+  }));
+  const maxValue = Math.max(...ranked.map((row) => {
+    const rowMetric = conditionMetric(row, metric);
+    return rowMetric.sd !== null && rowMetric.mean !== null ? rowMetric.mean + rowMetric.sd : rowMetric.mean ?? -Infinity;
+  }));
+  const rawMin = Number.isFinite(minValue) ? minValue : Math.min(...means);
+  const rawMax = Number.isFinite(maxValue) ? maxValue : Math.max(...means);
+  const spread = Math.max(0.05, rawMax - rawMin);
+  const minY = domainZero ? Math.min(0, rawMin - spread * 0.12) : rawMin - spread * 0.18;
+  const maxY = domainZero ? Math.max(0, rawMax + spread * 0.12) : rawMax + spread * 0.18;
+  const roomW = plotW / ranked.length;
+  const barW = Math.max(28, Math.min(62, roomW * 0.5));
+  const bottomY = toY(minY, minY, maxY, padT, plotH);
+  const zeroY = toY(0, minY, maxY, padT, plotH);
+  const baseY = domainZero && minY < 0 && maxY > 0 ? zeroY : bottomY;
+  const ticks = chartTicks(minY, maxY, 5);
+
+  return (
+    <svg width={CHART_W} height={AROUSAL_ONLY_CHART_H} role="img" aria-label={title}>
+      <rect width={CHART_W} height={AROUSAL_ONLY_CHART_H} fill={PALETTE.bg} />
+      <text x={padL} y={30} fill={PALETTE.text} fontSize="18" fontWeight="700">{title}</text>
+      <text x={padL} y={52} fill={PALETTE.sub} fontSize="12">{subtitle}</text>
+
+      {ticks.map((tick) => {
+        const y = toY(tick, minY, maxY, padT, plotH);
+        return (
+          <g key={tick.toFixed(4)}>
+            <line x1={padL} y1={y} x2={CHART_W - padR} y2={y} stroke={Math.abs(tick) < 1e-9 ? "#808080" : PALETTE.grid} strokeWidth={Math.abs(tick) < 1e-9 ? 1.2 : 1} />
+            <text x={padL - 14} y={y + 4} textAnchor="end" fill={PALETTE.sub} fontSize="10">{tick.toFixed(digits)}</text>
+          </g>
+        );
+      })}
+
+      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={PALETTE.grid} />
+      <line x1={padL} y1={baseY} x2={CHART_W - padR} y2={baseY} stroke="#8A8A8A" strokeWidth={1.2} />
+
+      {ranked.map((row, index) => {
+        const rowMetric = conditionMetric(row, metric);
+        const mean = rowMetric.mean ?? 0;
+        const sd = rowMetric.sd;
+        const cx = padL + roomW * index + roomW / 2;
+        const y = toY(mean, minY, maxY, padT, plotH);
+        const top = Math.min(y, baseY);
+        const barH = Math.max(2, Math.abs(baseY - y));
+        const sdLo = sd !== null ? toY(mean - sd, minY, maxY, padT, plotH) : null;
+        const sdHi = sd !== null ? toY(mean + sd, minY, maxY, padT, plotH) : null;
+        const labelY = Math.min(top - 8, padT + plotH - 4);
+        return (
+          <g key={row.condition}>
+            <rect x={cx - barW / 2} y={top} width={barW} height={barH} rx={4} fill={color} opacity={0.94} />
+            {sdLo !== null && sdHi !== null ? (
+              <g>
+                <line x1={cx} y1={sdHi} x2={cx} y2={sdLo} stroke={PALETTE.text} strokeWidth={1.1} opacity={0.7} />
+                <line x1={cx - 7} y1={sdHi} x2={cx + 7} y2={sdHi} stroke={PALETTE.text} strokeWidth={1.1} opacity={0.7} />
+                <line x1={cx - 7} y1={sdLo} x2={cx + 7} y2={sdLo} stroke={PALETTE.text} strokeWidth={1.1} opacity={0.7} />
+              </g>
+            ) : null}
+            <text x={cx} y={labelY} textAnchor="middle" fill={color} fontSize="11" fontWeight="700">
+              {formatPlain(mean, digits)}
+            </text>
+            <text x={cx} y={padT + plotH + 28} textAnchor="middle" fill={PALETTE.text} fontSize="14" fontWeight="800">{row.condition}</text>
+            <text x={cx} y={padT + plotH + 47} textAnchor="middle" fill={PALETTE.sub} fontSize="10">n={rowMetric.n}</text>
+          </g>
+        );
+      })}
+
+      <text x={CHART_W - padR} y={AROUSAL_ONLY_CHART_H - 20} textAnchor="end" fill={PALETTE.sub} fontSize="10">
+        Room types are sorted low to high; the highest value is on the right.
+      </text>
+    </svg>
+  );
+}
+
+function ConditionAggregateTable({ rows }: { rows: ConditionAggregateCondition[] }) {
+  const ranked = rankedConditionRows(rows, "stress_v2");
+  return (
+    <section className="room-summary-table" aria-label="Condition aggregate arousal and valence">
+      <h2>Room type aggregate values</h2>
+      {ranked.length === 0 ? (
+        <p>No room type aggregates are available.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Room type</th>
+              <th>Unified arousal</th>
+              <th>Arousal SD</th>
+              <th>Arousal n</th>
+              <th>Self-report valence</th>
+              <th>Valence SD</th>
+              <th>Valence n</th>
+              <th>Stress V2</th>
+              <th>HRV RMSSD</th>
+              <th>RSA amp</th>
+              <th>Self-report arousal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ranked.map((row) => {
+              const arousal = conditionMetric(row, "arousal_index");
+              const valence = conditionMetric(row, "self_report_valence");
+              const stress = row.stress_v2;
+              const hrv = row.rmssd;
+              const rsa = row.rsa_amplitude;
+              const reportedArousal = conditionMetric(row, "self_report_arousal");
+              return (
+                <tr key={row.condition}>
+                  <td>{row.condition}</td>
+                  <td className="num">{formatSigned(arousal.mean, 3)}</td>
+                  <td className="num">{formatPlain(arousal.sd, 3)}</td>
+                  <td className="num">{arousal.n}</td>
+                  <td className="num">{formatPlain(valence.mean, 2)}</td>
+                  <td className="num">{formatPlain(valence.sd, 2)}</td>
+                  <td className="num">{valence.n}</td>
+                  <td className="num">{formatPlain(stress.mean, 3)}</td>
+                  <td className="num">{formatPlain(hrv.mean, 1)}</td>
+                  <td className="num">{formatPlain(rsa.mean, 1)}</td>
+                  <td className="num">{formatPlain(reportedArousal.mean, 2)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 function RoomSummaryChart({ rows, comparisons }: { rows: RoomRow[]; comparisons: PairwiseDifference[] }) {
   if (rows.length === 0) return <div style={{ color: PALETTE.sub }}>No room-marker intervals with windowed arousal or Stress V2 data.</div>;
 
@@ -283,7 +595,6 @@ function RoomSummaryChart({ rows, comparisons }: { rows: RoomRow[]; comparisons:
             <rect x={stressBar.x} y={stressBar.y} width={stressBar.w} height={stressBar.h} rx={3} fill={STRESS_COLOR} />
             <text x={cx} y={padT + plotH + 24} textAnchor="middle" fill={PALETTE.text} fontSize="12" fontWeight="700">{row.interval.letter}</text>
             <text x={cx} y={padT + plotH + 42} textAnchor="middle" fill={PALETTE.sub} fontSize="11">{shortLabel(row.interval.label)}</text>
-            <text x={cx} y={padT + plotH + 58} textAnchor="middle" fill={PALETTE.sub} fontSize="10">{row.seconds.toFixed(0)} s</text>
             <text x={cx - barW / 2 - 4} y={Math.min(arousalBar.y, zeroY) - 8} textAnchor="middle" fill={AROUSAL_COLOR} fontSize="10">
               {formatMean(row.arousal.mean)}
             </text>
@@ -368,7 +679,7 @@ function RankedArousalChart({
             </text>
             <text x={cx} y={padT + plotH + 26} textAnchor="middle" fill={PALETTE.text} fontSize="12" fontWeight="800">{rank}</text>
             <text x={cx} y={padT + plotH + 44} textAnchor="middle" fill={PALETTE.text} fontSize="11" fontWeight="700">{row.interval.label}</text>
-            <text x={cx} y={padT + plotH + 61} textAnchor="middle" fill={PALETTE.sub} fontSize="10">{row.interval.letter} · {row.seconds.toFixed(0)} s</text>
+            <text x={cx} y={padT + plotH + 61} textAnchor="middle" fill={PALETTE.sub} fontSize="10">{row.interval.letter}</text>
           </g>
         );
       })}
@@ -477,6 +788,12 @@ function barGeometry(value: number | null, x: number, w: number, minY: number, m
 
 function toY(value: number, minY: number, maxY: number, padT: number, plotH: number): number {
   return padT + ((maxY - value) / (maxY - minY || 1)) * plotH;
+}
+
+function chartTicks(minY: number, maxY: number, count: number): number[] {
+  if (count <= 1 || !Number.isFinite(minY) || !Number.isFinite(maxY)) return [0];
+  const step = (maxY - minY) / (count - 1 || 1);
+  return Array.from({ length: count }, (_, index) => minY + step * index);
 }
 
 function arousalY(value: number, maxAbs: number, padT: number, plotH: number): number {

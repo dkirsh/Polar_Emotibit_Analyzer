@@ -51,6 +51,7 @@ class SessionDetail(BaseModel):
     extended: dict[str, Any] | None = None
     order_affect: dict[str, Any] | None = None
     room_stats: list[dict[str, Any]] | None = None
+    condition_aggregate: dict[str, Any] | None = None
 
 
 class CsvTimestampRange(BaseModel):

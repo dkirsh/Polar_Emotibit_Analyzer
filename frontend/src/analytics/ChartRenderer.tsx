@@ -12,7 +12,7 @@ import React from "react";
 import { ChartKind } from "./catalog";
 import { StoredSession } from "../api";
 import { PALETTE } from "./chartPalette";
-import { eventLetter, sessionEventIntervals, chartEventIntervals, sessionEvents } from "./eventIntervals";
+import { eventLetter, chartEventIntervals, sessionEvents } from "./eventIntervals";
 import { safe } from "./util";
 
 type Props = {
@@ -81,6 +81,11 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
   const ptsRaw = session.extended?.cleaned_timeseries ?? [];
   const hasHr = ptsRaw.some((p) => safe(p.hr_bpm as number | null | undefined) !== null);
   const hasEda = ptsRaw.some((p) => safe(p.eda_us as number | null | undefined) !== null);
+  const roomRows = roomConditionRows(session);
+
+  if (roomRows.length > 0 && hasHr && hasEda) {
+    return <ConditionIntervalPanels session={session} width={width} height={height} />;
+  }
 
   if (hasHr && !hasEda) {
     const pts = ptsRaw.filter(
@@ -163,6 +168,131 @@ function TimeseriesOverlay({ session, width, height }: { session: StoredSession;
       <text x={labelX(toX(t1), width, 44)} y={height - 5} fill={PALETTE.sub} fontSize="10">{((t1 - t0) / 1000).toFixed(0)} s</text>
     </svg>
   );
+}
+
+function ConditionIntervalPanels({ session, width, height }: { session: StoredSession; width: number; height: number }) {
+  const ptsRaw = session.extended?.cleaned_timeseries ?? [];
+  const rooms = roomConditionRows(session);
+  if (rooms.length === 0) return <Empty msg="No room condition intervals available" />;
+  const segments = rooms.map((room) => {
+    const pts = ptsRaw
+      .filter((p) => (
+        safe(p.timestamp_ms as number | null | undefined) !== null &&
+        safe(p.hr_bpm as number | null | undefined) !== null &&
+        safe(p.eda_us as number | null | undefined) !== null &&
+        p.timestamp_ms! >= room.onset_ms &&
+        p.timestamp_ms! <= room.offset_ms
+      ))
+      .map((p) => ({
+        t: (p.timestamp_ms! - room.onset_ms) / 1000,
+        hr: p.hr_bpm!,
+        eda: p.eda_us!,
+      }));
+    return { room, pts };
+  });
+  const allHr = segments.flatMap((segment) => segment.pts.map((p) => p.hr));
+  const allEda = segments.flatMap((segment) => segment.pts.map((p) => p.eda));
+  if (allHr.length < 2 || allEda.length < 2) return <Empty msg="Not enough room interval samples" />;
+
+  const [hrMin, hrMax] = paddedDomain(Math.min(...allHr), Math.max(...allHr), 0.08, 0.12);
+  const [edaMin, edaMax] = paddedDomain(Math.min(...allEda), Math.max(...allEda), 0.08, 0.12);
+  const cols = Math.min(8, Math.max(1, segments.length));
+  const rows = Math.ceil(segments.length / cols);
+  const gapX = 10;
+  const gapY = 18;
+  const padL = 30;
+  const padR = 18;
+  const padT = 42;
+  const padB = 34;
+  const panelW = (width - padL - padR - gapX * (cols - 1)) / cols;
+  const panelH = (height - padT - padB - gapY * (rows - 1)) / rows;
+  const traceGap = 10;
+  const traceH = Math.max(24, (panelH - 62 - traceGap) / 2);
+  const traceTop = 34;
+  const duration = Math.max(1, ...segments.map((segment) => (segment.room.offset_ms - segment.room.onset_ms) / 1000));
+
+  return (
+    <svg width={width} height={height} role="img" aria-label="Condition interval HR and EDA panels">
+      <rect width={width} height={height} fill={PALETTE.bg} />
+      <text x={padL} y={24} fill={PALETTE.text} fontSize="13" fontWeight="700">Room type intervals: HR and EDA</text>
+      <text x={padL + 230} y={24} fill={PALETTE.hr} fontSize="11" fontWeight="700">HR</text>
+      <text x={padL + 258} y={24} fill={PALETTE.eda} fontSize="11" fontWeight="700">EDA</text>
+      {segments.map((segment, index) => {
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        const x0 = padL + col * (panelW + gapX);
+        const y0 = padT + row * (panelH + gapY);
+        const plotW = panelW - 18;
+        const hrY0 = y0 + traceTop;
+        const edaY0 = hrY0 + traceH + traceGap;
+        const toX = (t: number) => x0 + 9 + (Math.max(0, Math.min(duration, t)) / duration) * plotW;
+        const toYHR = (v: number) => hrY0 + ((hrMax - v) / (hrMax - hrMin || 1)) * traceH;
+        const toYEDA = (v: number) => edaY0 + ((edaMax - v) / (edaMax - edaMin || 1)) * traceH;
+        const hrPath = segment.pts.map((p, i) => `${i === 0 ? "M" : "L"}${toX(p.t).toFixed(1)},${toYHR(p.hr).toFixed(1)}`).join(" ");
+        const edaPath = segment.pts.map((p, i) => `${i === 0 ? "M" : "L"}${toX(p.t).toFixed(1)},${toYEDA(p.eda).toFixed(1)}`).join(" ");
+        const hrMeanY = typeof segment.room.mean_hr === "number" ? toYHR(segment.room.mean_hr) : null;
+        const edaMeanY = typeof segment.room.mean_eda === "number" ? toYEDA(segment.room.mean_eda) : null;
+        return (
+          <g key={segment.room.room_key}>
+            <rect x={x0} y={y0} width={panelW} height={panelH} fill="#151515" stroke={PALETTE.grid} rx={4} />
+            <text x={x0 + 10} y={y0 + 18} fill={PALETTE.text} fontSize="14" fontWeight="800">{segment.room.room_type}</text>
+            <text x={x0 + panelW - 8} y={y0 + 18} textAnchor="end" fill={PALETTE.sub} fontSize="9">score {arousalScore(segment.room, rooms).toFixed(2)}</text>
+            <line x1={x0 + 9} y1={hrY0 + traceH} x2={x0 + 9 + plotW} y2={hrY0 + traceH} stroke={PALETTE.grid} />
+            <line x1={x0 + 9} y1={edaY0 + traceH} x2={x0 + 9 + plotW} y2={edaY0 + traceH} stroke={PALETTE.grid} />
+            <path d={hrPath} stroke={PALETTE.hr} strokeWidth={1.5} fill="none" />
+            <path d={edaPath} stroke={PALETTE.eda} strokeWidth={1.5} fill="none" />
+            {hrMeanY !== null && (
+              <g>
+                <line x1={x0 + 9} y1={hrMeanY} x2={x0 + 9 + plotW} y2={hrMeanY} stroke={PALETTE.hr} strokeWidth={1} strokeDasharray="4 3" opacity={0.85} />
+                <text x={x0 + 12} y={Math.max(hrY0 + 9, hrMeanY - 3)} fill={PALETTE.hr} fontSize="8" fontWeight="700">
+                  mean {fmtMaybe(segment.room.mean_hr, 1)}
+                </text>
+              </g>
+            )}
+            {edaMeanY !== null && (
+              <g>
+                <line x1={x0 + 9} y1={edaMeanY} x2={x0 + 9 + plotW} y2={edaMeanY} stroke={PALETTE.eda} strokeWidth={1} strokeDasharray="4 3" opacity={0.85} />
+                <text x={x0 + 12} y={Math.max(edaY0 + 9, edaMeanY - 3)} fill={PALETTE.eda} fontSize="8" fontWeight="700">
+                  mean {fmtMaybe(segment.room.mean_eda, 2)}
+                </text>
+              </g>
+            )}
+            <text x={x0 + 10} y={y0 + panelH - 14} fill={PALETTE.hr} fontSize="9">HR</text>
+            <text x={x0 + panelW - 10} y={y0 + panelH - 14} textAnchor="end" fill={PALETTE.eda} fontSize="9">EDA</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function roomConditionRows(session: StoredSession): Array<NonNullable<StoredSession["room_stats"]>[number]> {
+  const rows = (session.room_stats ?? [])
+    .filter((row) => /^room\d+$/i.test(row.room_key) && row.room_type)
+    .slice();
+  return rows.sort((a, b) => arousalScore(a, rows) - arousalScore(b, rows));
+}
+
+function arousalScore(
+  row: NonNullable<StoredSession["room_stats"]>[number],
+  rows: Array<NonNullable<StoredSession["room_stats"]>[number]>,
+): number {
+  const hrVals = rows.map((r) => r.mean_hr).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  const edaVals = rows.map((r) => r.mean_eda).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  const hr = normalize(row.mean_hr, hrVals);
+  const eda = normalize(row.mean_eda, edaVals);
+  if (hr === null && eda === null) return 0;
+  if (hr === null) return eda ?? 0;
+  if (eda === null) return hr;
+  return 0.5 * hr + 0.5 * eda;
+}
+
+function normalize(value: number | null | undefined, values: number[]): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || values.length === 0) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return 0.5;
+  return (value - min) / (max - min);
 }
 
 function SingleSeriesChart({
@@ -645,7 +775,7 @@ function SummaryTable({ session, kind: _kind }: { session: StoredSession; kind: 
   const fs = session.result.feature_summary;
   const ds = session.extended?.descriptive_stats;
   const metrics = [
-    { label: "RMSSD", value: fs.rmssd_ms, max: 100, unit: "ms", color: PALETTE.hr },
+    { label: "HRV RMSSD", value: fs.rmssd_ms, max: 100, unit: "ms", color: PALETTE.hr },
     { label: "SDNN", value: fs.sdnn_ms, max: 250, unit: "ms", color: PALETTE.accent },
     { label: "Mean HR", value: fs.mean_hr_bpm, max: 120, unit: "bpm", color: PALETTE.eda },
     { label: "EDA tonic", value: fs.eda_mean_us, max: 20, unit: "uS", color: PALETTE.resp },
@@ -687,7 +817,7 @@ function SummaryTable({ session, kind: _kind }: { session: StoredSession; kind: 
           </tr>
         </thead>
         <tbody>
-          <tr><td style={cell}>RMSSD</td><td style={cellNum}>{fs.rmssd_ms.toFixed(2)}</td><td style={cellSub}>ms · norm 40–80 (Shaffer &amp; Ginsberg 2017)</td></tr>
+          <tr><td style={cell}>HRV RMSSD</td><td style={cellNum}>{fs.rmssd_ms.toFixed(2)}</td><td style={cellSub}>ms · norm 40–80 (Shaffer &amp; Ginsberg 2017)</td></tr>
           <tr><td style={cell}>SDNN</td><td style={cellNum}>{fs.sdnn_ms.toFixed(2)}</td><td style={cellSub}>ms · &lt;50 restricted autonomic range</td></tr>
           <tr><td style={cell}>Mean HR</td><td style={cellNum}>{fs.mean_hr_bpm.toFixed(2)}</td><td style={cellSub}>bpm · &gt;90 resting suggests sympathetic dominance</td></tr>
           <tr><td style={cell}>EDA tonic (mean SCL)</td><td style={cellNum}>{fs.eda_mean_us.toFixed(3)}</td><td style={cellSub}>µS · typical 2–20 (Boucsein 2012)</td></tr>
@@ -931,7 +1061,7 @@ function StressTimeline({ session, width, height }: { session: StoredSession; wi
         { values: w.v2_hr_contribution ?? [], color: PALETTE.hr, label: "HR" },
         { values: w.v2_eda_contribution ?? [], color: PALETTE.eda, label: "EDA tonic" },
         { values: w.v2_phasic_contribution ?? [], color: PALETTE.warn, label: "EDA phasic" },
-        { values: w.v2_vagal_contribution ?? [], color: PALETTE.bad, label: "Vagal deficit" },
+        { values: w.v2_vagal_contribution ?? [], color: PALETTE.bad, label: "HRV vagal deficit" },
         { values: w.v2_sympathovagal_contribution ?? [], color: "#7C9CFF", label: "LF_nu balance" },
         { values: w.v2_rigidity_contribution ?? [], color: "#C26BFF", label: "SD1/SD2 rigidity" },
         { values: w.v2_rsa_contribution ?? [], color: PALETTE.resp, label: "RSA deficit" },
@@ -1230,7 +1360,7 @@ function dominantDriverLabel(sessionWindowed: NonNullable<StoredSession["extende
     { label: "HR", values: sessionWindowed?.v2_hr_contribution },
     { label: "EDA tonic", values: sessionWindowed?.v2_eda_contribution },
     { label: "EDA phasic", values: sessionWindowed?.v2_phasic_contribution },
-    { label: "vagal deficit", values: sessionWindowed?.v2_vagal_contribution },
+    { label: "HRV vagal deficit", values: sessionWindowed?.v2_vagal_contribution },
     { label: "LF_nu", values: sessionWindowed?.v2_sympathovagal_contribution },
     { label: "rigidity", values: sessionWindowed?.v2_rigidity_contribution },
     { label: "RSA", values: sessionWindowed?.v2_rsa_contribution },

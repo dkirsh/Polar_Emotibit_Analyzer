@@ -106,6 +106,12 @@ def compute_room_stats(
                 "mean_hr": None, "sd_hr": None,
                 "mean_eda": None, "sd_eda": None,
                 "rmssd": None, "stress_v2": None, "stress_v1": None,
+                "mean_rpm": None, "rsa_amplitude": None,
+                "v2_hr_contribution": None, "v2_eda_contribution": None,
+                "v2_phasic_contribution": None, "v2_vagal_contribution": None,
+                "v2_sympathovagal_contribution": None,
+                "v2_rigidity_contribution": None,
+                "v2_rsa_contribution": None,
             })
             results.append(stats)
             continue
@@ -135,22 +141,51 @@ def compute_room_stats(
         except Exception:
             stats["rmssd"] = None
 
+        # Respiration/RSA and richer HRV features can be computed from Polar
+        # alone. Stress V2, however, is a multimodal HRV + EDA composite; do
+        # not synthesize its EDA terms as zero for Polar-only room rows.
+        try:
+            poincare = compute_poincare_features(window)
+        except Exception:
+            poincare = {}
+        try:
+            freq = compute_hrv_frequency_features(window)
+        except Exception:
+            freq = {}
+        try:
+            edr = compute_edr(window)
+            rsa_amp = float(edr.get("rsa_amplitude", 0.0)) if edr.get("rsa_amplitude") is not None else None
+            mean_rpm = float(edr.get("mean_rpm", 0.0)) if edr.get("mean_rpm") is not None else None
+            stats["mean_rpm"] = round(mean_rpm, 1) if mean_rpm is not None else None
+            stats["rsa_amplitude"] = round(rsa_amp, 1) if rsa_amp is not None else None
+        except Exception:
+            rsa_amp = None
+            stats["mean_rpm"] = None
+            stats["rsa_amplitude"] = None
+
+        has_eda = "eda_us" in window.columns and window["eda_us"].dropna().size > 1
+        if not has_eda:
+            stats["stress_v2"] = None
+            stats["stress_v1"] = None
+            stats["v2_hr_contribution"] = None
+            stats["v2_eda_contribution"] = None
+            stats["v2_phasic_contribution"] = None
+            stats["v2_vagal_contribution"] = None
+            stats["v2_sympathovagal_contribution"] = None
+            stats["v2_rigidity_contribution"] = None
+            stats["v2_rsa_contribution"] = None
+            stats["stress_v2_contributions"] = None
+            results.append(stats)
+            continue
+
         # Stress scores
         try:
-            phasic = 0.0
-            if "eda_us" in window.columns and len(window) > 1:
-                phasic = float(np.mean(np.abs(np.diff(window["eda_us"].dropna().to_numpy(dtype=float)))))
-
+            phasic = float(np.mean(np.abs(np.diff(window["eda_us"].dropna().to_numpy(dtype=float)))))
             mean_hr = stats["mean_hr"] or 0.0
             mean_eda = stats["mean_eda"] or 0.0
             rmssd_val = stats["rmssd"] or 0.0
 
-            poincare = compute_poincare_features(window)
-            freq = compute_hrv_frequency_features(window)
-            edr = compute_edr(window)
-            rsa_amp = float(edr.get("rsa_amplitude", 0.0)) if edr.get("rsa_amplitude") is not None else None
-
-            stress_v2, _ = compute_stress_score_v2(
+            stress_v2, stress_v2_contrib = compute_stress_score_v2(
                 rmssd_ms=rmssd_val,
                 mean_hr_bpm=mean_hr,
                 eda_mean_us=mean_eda,
@@ -161,6 +196,14 @@ def compute_room_stats(
                 rsa_amplitude=rsa_amp,
             )
             stats["stress_v2"] = round(float(stress_v2), 3) if stress_v2 is not None else None
+            stats["v2_hr_contribution"] = _round_optional(stress_v2_contrib.get("hr"), 4)
+            stats["v2_eda_contribution"] = _round_optional(stress_v2_contrib.get("eda"), 4)
+            stats["v2_phasic_contribution"] = _round_optional(stress_v2_contrib.get("phasic"), 4)
+            stats["v2_vagal_contribution"] = _round_optional(stress_v2_contrib.get("vagal"), 4)
+            stats["v2_sympathovagal_contribution"] = _round_optional(stress_v2_contrib.get("sympathovagal"), 4)
+            stats["v2_rigidity_contribution"] = _round_optional(stress_v2_contrib.get("rigidity"), 4)
+            stats["v2_rsa_contribution"] = _round_optional(stress_v2_contrib.get("rsa"), 4)
+            stats["stress_v2_contributions"] = stress_v2_contrib
 
             decomp = decompose_stress(
                 rmssd_ms=rmssd_val,
@@ -173,10 +216,28 @@ def compute_room_stats(
         except Exception:
             stats["stress_v2"] = None
             stats["stress_v1"] = None
+            stats["mean_rpm"] = None
+            stats["rsa_amplitude"] = None
+            stats["v2_hr_contribution"] = None
+            stats["v2_eda_contribution"] = None
+            stats["v2_phasic_contribution"] = None
+            stats["v2_vagal_contribution"] = None
+            stats["v2_sympathovagal_contribution"] = None
+            stats["v2_rigidity_contribution"] = None
+            stats["v2_rsa_contribution"] = None
 
         results.append(stats)
 
     return results
+
+
+def _round_optional(value: Any, digits: int) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), digits)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_room_intervals(
