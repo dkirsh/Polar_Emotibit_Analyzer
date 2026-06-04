@@ -87,7 +87,27 @@ export const AnalyticDetailPage: React.FC = () => {
       clone.setAttribute("width", `${Math.ceil(bbox.width + pad * 2)}`);
       clone.setAttribute("height", `${Math.ceil(bbox.height + pad * 2)}`);
     } catch {
-      // If getBBox fails, fall back to the rendered SVG geometry.
+      // getBBox can fail when the SVG is not rendered (e.g. hidden tab,
+      // detached DOM, or some Safari/Firefox edge cases). Fall back to
+      // the existing viewBox, then to offsetWidth/Height, then to safe
+      // defaults so the export still produces a usable file.
+      const pad = 18;
+      const existingVB = svg.getAttribute("viewBox");
+      if (existingVB) {
+        const parts = existingVB.split(/[\s,]+/).map(Number);
+        if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+          const [vx, vy, vw, vh] = parts;
+          clone.setAttribute("viewBox", `${vx - pad} ${vy - pad} ${vw + pad * 2} ${vh + pad * 2}`);
+          clone.setAttribute("width", `${Math.ceil(vw + pad * 2)}`);
+          clone.setAttribute("height", `${Math.ceil(vh + pad * 2)}`);
+        }
+      } else {
+        const w = svg.clientWidth || svg.offsetWidth || 920;
+        const h = svg.clientHeight || svg.offsetHeight || 430;
+        clone.setAttribute("viewBox", `${-pad} ${-pad} ${w + pad * 2} ${h + pad * 2}`);
+        clone.setAttribute("width", `${Math.ceil(w + pad * 2)}`);
+        clone.setAttribute("height", `${Math.ceil(h + pad * 2)}`);
+      }
     }
     const source = new XMLSerializer().serializeToString(clone);
     const blob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
