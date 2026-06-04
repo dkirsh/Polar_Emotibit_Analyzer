@@ -422,7 +422,7 @@ def compute_respiratory_features(
         "n_breaths": len(per_breath),
         "resp_rate_bpm": round(60.0 / mean_cycle, 2) if mean_cycle > 0 else None,
         "mean_cycle_dur_s": round(mean_cycle, 3),
-        "sd_cycle_dur_s": round(float(np.std(cycles)), 3),
+        "sd_cycle_dur_s": round(float(np.std(cycles, ddof=1) if len(cycles) > 1 else 0.0), 3),
         "ie_ratio_mean": round(float(np.mean(ie_ratios)), 3) if ie_ratios else None,
         "duty_cycle_mean": round(float(np.mean(duty_cycles)), 3) if duty_cycles else None,
         "per_breath": per_breath,

@@ -1,0 +1,9 @@
+subject_id,room_number,room_type,valence,arousal
+P041,1,biophilic,4.2,1.8
+P041,2,minimalist,3.1,2.5
+P041,3,industrial,2.4,3.8
+P041,4,cozy_warm,4.5,1.6
+P041,5,open_plan,3.3,3.1
+P041,6,compressed,2.1,4.2
+P041,7,daylit,4.7,1.4
+P041,8,dim_noisy,1.9,4.5

@@ -44,7 +44,23 @@ def _load_store_from_disk() -> None:
 def _persist_store() -> None:
     try:
         _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STORE_PATH.write_text(json.dumps(_SESSION_STORE, indent=2, default=str))
+        # Atomic write: write to temp file then rename, preventing partial
+        # writes or clobbering on concurrent requests.
+        import tempfile, os
+        fd, tmp_path = tempfile.mkstemp(
+            dir=_STORE_PATH.parent, suffix=".tmp", prefix="session_store_"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(_SESSION_STORE, f, indent=2, default=str)
+            os.replace(tmp_path, str(_STORE_PATH))
+        except BaseException:
+            # Clean up temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except OSError as exc:
         # The in-memory store is already updated before this function is
         # called, so a local filesystem permission failure should not turn

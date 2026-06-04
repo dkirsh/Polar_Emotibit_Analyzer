@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -624,7 +624,7 @@ def export_to_pdf(analysis: AnalysisResponse, *, session_id: str | None = None) 
 
     story: list[Any] = []
     story.append(Paragraph("Polar-EmotiBit HRV report", h1))
-    meta_line = datetime.utcnow().strftime("Generated %Y-%m-%d %H:%M UTC")
+    meta_line = datetime.now(timezone.utc).strftime("Generated %Y-%m-%d %H:%M UTC")
     if session_id:
         meta_line += f" · session_id = {session_id}"
     story.append(Paragraph(meta_line, caption))
@@ -703,7 +703,7 @@ def _minimal_pdf_export(analysis: AnalysisResponse, *, session_id: str | None = 
         f"RMSSD: {fs.rmssd_ms:.3f} ms",
         f"SDNN: {fs.sdnn_ms:.3f} ms",
         f"EDA mean: {fs.eda_mean_us:.3f} uS",
-        f"Stress v2: {fs.stress_score_v2 if fs.stress_score_v2 is not None else ''}",
+        f"Stress: {fs.stress_score if fs.stress_score is not None else ''}",
         f"Sync QC: {analysis.sync_qc_band} ({analysis.sync_qc_score:.1f}/100)",
         "Non-diagnostic notice:",
         analysis.non_diagnostic_notice,

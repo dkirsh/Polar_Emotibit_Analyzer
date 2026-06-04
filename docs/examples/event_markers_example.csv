@@ -1,0 +1,13 @@
+session_id,event_code,utc_ms,note
+STUDY001_P041,recording_start,1715000000000,session begin
+STUDY001_P041,baseline_onset,1715000030000,entering baseline
+STUDY001_P041,baseline_offset,1715000150000,leaving baseline
+STUDY001_P041,room1_onset,1715000180000,entering room 1 (Type A)
+STUDY001_P041,room1_offset,1715000420000,leaving room 1
+STUDY001_P041,room2_onset,1715000450000,entering room 2 (Type B)
+STUDY001_P041,room2_offset,1715000690000,leaving room 2
+STUDY001_P041,room3_onset,1715000720000,entering room 3 (Type C)
+STUDY001_P041,room3_offset,1715000960000,leaving room 3
+STUDY001_P041,recovery_onset,1715000990000,recovery phase
+STUDY001_P041,recovery_offset,1715001110000,end recovery
+STUDY001_P041,recording_end,1715001140000,session complete

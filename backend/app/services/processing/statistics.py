@@ -118,9 +118,12 @@ def _trend_pvalue(values: np.ndarray) -> float:
     """
     if len(values) < 3:
         return 1.0
+    # Guard: constant input makes pearsonr return NaN
+    if np.std(values) < 1e-12:
+        return 1.0
     x = np.arange(len(values), dtype=float)
     _, p = sp_stats.pearsonr(x, values)
-    return float(p)
+    return float(p) if np.isfinite(p) else 1.0
 
 
 def apply_fdr_correction(p_values: list[float]) -> list[float]:
