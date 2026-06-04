@@ -8,11 +8,22 @@ see docs/GUI_SCOPE_FILE_ONLY_2026-04-20.md.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routes import analysis, validate
 from app.schemas.analysis import HealthResponse
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup / shutdown lifecycle hook."""
+    # Deferred session-store load — avoids the old import-time side effect.
+    analysis.init_session_store()
+    yield
+
 
 app = FastAPI(
     title="Polar-EmotiBit Analyzer API",
@@ -21,6 +32,7 @@ app = FastAPI(
         "Post-hoc synchronization and feature extraction for pre-recorded "
         "Polar H10 + EmotiBit sessions. Not a live-streaming service."
     ),
+    lifespan=lifespan,
 )
 
 # CORS is permissive in dev (the Vite dev server runs on :5173). Tighten

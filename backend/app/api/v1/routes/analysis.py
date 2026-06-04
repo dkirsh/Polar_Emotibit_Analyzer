@@ -174,7 +174,24 @@ def _maybe_backfill_edr_proxy(record: dict[str, Any]) -> bool:
     return changed
 
 
-_load_store_from_disk()
+
+_session_store_initialized = False
+
+
+def init_session_store() -> None:
+    """Load + migrate the on-disk session store.
+
+    Must be called once at app startup rather than at import time so
+    that merely importing this module does not trigger filesystem I/O
+    or rewrite session_store.json.
+    """
+    global _session_store_initialized
+    if _session_store_initialized:
+        return
+    _load_store_from_disk()
+    if _migrate_stored_sessions():
+        _persist_store()
+    _session_store_initialized = True
 
 
 # ----- Analysis ----------------------------------------------------------
