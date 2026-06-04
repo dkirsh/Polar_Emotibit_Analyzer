@@ -5,6 +5,7 @@ import pytest
 from app.services.processing.features import (
     compute_edr,
     compute_edr_detailed_from_rr_ms,
+    compute_hrv_features_with_accel,
     compute_temperature_features,
     compute_rolling_features
 )
@@ -105,3 +106,142 @@ def test_compute_rolling_features():
     assert result_df.iloc[0]["window_end_ms"] == 60000
     assert "rmssd_ms" in result_df.columns
     assert "mean_rpm" in result_df.columns
+
+
+# ---------------------------------------------------------------------------
+# Movement-artifact-aware HRV (T6)
+# ---------------------------------------------------------------------------
+
+
+def _make_steady_df(n_beats=80):
+    """Build a DataFrame with steady 800 ms RR and quiet accelerometer."""
+    rr = np.full(n_beats, 800.0)
+    ts = np.cumsum(rr).astype(int)
+    # Quiet accel: ~1 g on z only
+    return pd.DataFrame({
+        "timestamp_ms": ts,
+        "hr_bpm": 60000.0 / rr,
+        "rr_ms": rr,
+        "acc_x": np.zeros(n_beats),
+        "acc_y": np.zeros(n_beats),
+        "acc_z": np.ones(n_beats),  # 1g gravity
+    })
+
+
+def test_hrv_accel_no_movement_passes_through_unchanged():
+    """With quiet accelerometer data, all RR intervals are retained."""
+    df = _make_steady_df(80)
+    result = compute_hrv_features_with_accel(df)
+
+    assert result["rr_excluded_movement"] == 0
+    assert result["movement_artifact_ratio"] == 0.0
+    assert result["rmssd_ms"] >= 0
+    assert result["sdnn_ms"] >= 0
+    assert result["rr_total"] > 0
+
+
+def test_hrv_accel_movement_spikes_cause_exclusion():
+    """Simulated movement spikes cause RR intervals to be excluded."""
+    df = _make_steady_df(80)
+
+    # Inject a big accel spike in the middle of the trace (samples 35-45)
+    df.loc[35:45, "acc_x"] = 5.0  # >> 1.5g threshold
+    df.loc[35:45, "acc_y"] = 5.0
+    df.loc[35:45, "acc_z"] = 5.0
+
+    result = compute_hrv_features_with_accel(df, accel_threshold_g=1.5)
+
+    assert result["rr_excluded_movement"] > 0
+    assert result["movement_artifact_ratio"] > 0.0
+    assert result["rr_total"] == result["rr_excluded_movement"] + (
+        result["rr_total"] - result["rr_excluded_movement"]
+    )
+
+
+def test_hrv_accel_exclusion_ratio_is_correct():
+    """The movement_artifact_ratio = excluded / total."""
+    df = _make_steady_df(100)
+
+    # Spike ~half the trace
+    df.loc[0:49, "acc_x"] = 10.0
+    df.loc[0:49, "acc_y"] = 10.0
+    df.loc[0:49, "acc_z"] = 10.0
+
+    result = compute_hrv_features_with_accel(df, accel_threshold_g=1.5)
+
+    total = result["rr_total"]
+    excluded = result["rr_excluded_movement"]
+    expected_ratio = excluded / total if total > 0 else 0.0
+
+    assert abs(result["movement_artifact_ratio"] - expected_ratio) < 1e-9
+    # At least some were excluded
+    assert excluded > 0
+
+
+def test_hrv_accel_no_accel_columns_still_works():
+    """Without acc_x/y/z columns, function behaves like compute_hrv_features."""
+    rr = np.full(80, 800.0)
+    ts = np.cumsum(rr).astype(int)
+    df = pd.DataFrame({
+        "timestamp_ms": ts,
+        "hr_bpm": 60000.0 / rr,
+        "rr_ms": rr,
+    })
+
+    result = compute_hrv_features_with_accel(df)
+    assert result["rr_excluded_movement"] == 0
+    assert result["movement_artifact_ratio"] == 0.0
+    assert result["rmssd_ms"] >= 0
+
+
+def test_hrv_accel_all_movement_returns_zero_hrv():
+    """When ALL epochs are flagged as movement, HRV is zero (no crash)."""
+    df = _make_steady_df(50)
+    # Flag every sample as extreme movement
+    df["acc_x"] = 20.0
+    df["acc_y"] = 20.0
+    df["acc_z"] = 20.0
+
+    result = compute_hrv_features_with_accel(df, accel_threshold_g=1.5)
+
+    assert result["rmssd_ms"] == 0.0
+    assert result["sdnn_ms"] == 0.0
+    assert result["rr_excluded_movement"] == result["rr_total"]
+    assert result["movement_artifact_ratio"] == 1.0
+
+
+def test_hrv_accel_borderline_threshold():
+    """Accel magnitude exactly at threshold should NOT be flagged."""
+    df = _make_steady_df(50)
+    # Set magnitude to exactly 1.5g (should not exceed threshold)
+    # sqrt(0^2 + 0^2 + 1.5^2) = 1.5
+    df["acc_x"] = 0.0
+    df["acc_y"] = 0.0
+    df["acc_z"] = 1.5
+
+    result = compute_hrv_features_with_accel(df, accel_threshold_g=1.5)
+    assert result["rr_excluded_movement"] == 0
+    assert result["movement_artifact_ratio"] == 0.0
+
+
+def test_hrv_accel_mismatched_lengths():
+    """Accel and RR can have different sample counts (accel at higher rate)."""
+    # 50 RR intervals
+    rr = np.full(50, 800.0)
+    # 200 accel samples (higher rate), same time span
+    n_accel = 200
+    ts_accel = np.linspace(800, 50 * 800, n_accel).astype(int)
+
+    df = pd.DataFrame({
+        "timestamp_ms": ts_accel,
+        "hr_bpm": np.full(n_accel, 75.0),
+        "rr_ms": np.concatenate([rr, np.full(n_accel - 50, np.nan)]),
+        "acc_x": np.zeros(n_accel),
+        "acc_y": np.zeros(n_accel),
+        "acc_z": np.ones(n_accel),
+    })
+
+    result = compute_hrv_features_with_accel(df)
+    # Should not crash and should process successfully
+    assert result["rr_total"] > 0
+    assert result["movement_artifact_ratio"] >= 0.0
