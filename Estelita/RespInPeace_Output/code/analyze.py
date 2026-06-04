@@ -20,8 +20,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import stats
 
-warnings.simplefilter("ignore")
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+warnings.simplefilter("ignore")
 sys.path.insert(0, HERE)
 from rip import Resp
 
