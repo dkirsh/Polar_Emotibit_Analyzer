@@ -12,6 +12,8 @@ CSV(s) inside, then validates that component.
 from __future__ import annotations
 
 import io
+import logging
+import re
 import zipfile
 from typing import Any
 
@@ -19,6 +21,10 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, UploadFile, status
 
 from app.schemas.analysis import CsvTimestampRange, CsvValidationResponse
+from app.services.ingestion.column_repair import (
+    classify_columns,
+    suggest_column_repairs,
+)
 from app.services.ingestion.parsers import (
     OPTIONAL_EMOTIBIT_ACCEL_COLUMNS,
     OPTIONAL_EMOTIBIT_RESP_COLUMNS,
@@ -30,6 +36,7 @@ from app.services.ingestion.zip_ingestion import extract_and_classify_zip
 
 
 router = APIRouter(tags=["validate"])
+log = logging.getLogger(__name__)
 
 
 def _is_zip(raw_bytes: bytes) -> bool:
@@ -57,9 +64,8 @@ async def validate_emotibit_csv(file: UploadFile) -> CsvValidationResponse:
             csv_text = raw_bytes.decode("utf-8", errors="replace")
             df = parse_emotibit_csv(csv_text)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"valid": False, "reason": str(exc)},
+        raise _column_repair_422(
+            exc, raw_bytes, "EmotiBit",
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
@@ -150,9 +156,8 @@ async def validate_polar_csv(file: UploadFile) -> CsvValidationResponse:
             csv_text = raw_bytes.decode("utf-8", errors="replace")
             df = parse_polar_csv(csv_text)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"valid": False, "reason": str(exc)},
+        raise _column_repair_422(
+            exc, raw_bytes, "Polar",
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
@@ -250,9 +255,16 @@ async def validate_markers_csv(file: UploadFile) -> CsvValidationResponse:
         if "event_code" in df.columns and "utc_ms" in df.columns:
             pass  # Accept without session_id
         else:
+            present_cols = sorted(df.columns.tolist())
+            suggestions = suggest_column_repairs(missing, present_cols)
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={"valid": False, "reason": f"Missing required columns: {missing}"},
+                detail={
+                    "valid": False,
+                    "reason": f"Markers missing required columns: {missing}",
+                    "suggestions": suggestions,
+                    "columns_present": present_cols,
+                },
             )
 
     codes_present = sorted(set(df["event_code"].astype(str).tolist())) if "event_code" in df.columns else []
@@ -337,9 +349,8 @@ async def validate_order_affect_csv_endpoint(file: UploadFile) -> CsvValidationR
             csv_text = raw_bytes.decode("utf-8", errors="replace")
         info = validate_order_affect_csv(csv_text)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"valid": False, "reason": str(exc)},
+        raise _column_repair_422(
+            exc, raw_bytes, "Order & Affect",
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
@@ -377,9 +388,8 @@ async def validate_vernier_xlsx(file: UploadFile) -> CsvValidationResponse:
     try:
         result = parse_vernier_xlsx(raw_bytes)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"valid": False, "reason": str(exc)},
+        raise _column_repair_422(
+            exc, raw_bytes, "Vernier",
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
@@ -403,4 +413,185 @@ async def validate_vernier_xlsx(file: UploadFile) -> CsvValidationResponse:
         n_resampled=md["n_resampled"],
         vendor_rr_median=rr_val["vendor_rr_median"] if rr_val else None,
     )
+
+
+# ── Shared helper: column-repair 422 builder ─────────────────────────────
+
+
+_MISSING_COL_RE = re.compile(r"missing required columns?:\s*\[?([^\]]+)\]?", re.IGNORECASE)
+
+
+def _extract_columns_from_bytes(raw_bytes: bytes) -> list[str]:
+    """Read the header row from raw CSV bytes (works for non-ZIP files)."""
+    try:
+        text = raw_bytes.decode("utf-8", errors="replace")
+        # Skip comment lines
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                return [c.strip() for c in stripped.split(",") if c.strip()]
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
+def _column_repair_422(
+    exc: ValueError,
+    raw_bytes: bytes,
+    source_label: str,
+) -> HTTPException:
+    """Build a 422 HTTPException with column-repair suggestions.
+
+    If the error message mentions missing columns, parses them out and
+    compares against the file's actual header to produce suggestions.
+    """
+    reason = str(exc)
+    match = _MISSING_COL_RE.search(reason)
+    if match:
+        raw_names = match.group(1)
+        # Parse column names from the error message (may be quoted strings)
+        missing = [
+            c.strip().strip("'\"") for c in raw_names.split(",") if c.strip().strip("'\"")
+        ]
+        present = _extract_columns_from_bytes(raw_bytes)
+        suggestions = suggest_column_repairs(missing, present)
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "valid": False,
+                "reason": f"{source_label} missing required columns: {missing}",
+                "suggestions": suggestions,
+                "columns_present": present,
+            },
+        )
+
+    # No column-missing pattern found; return a plain 422.
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={"valid": False, "reason": reason},
+    )
+
+
+# ── ZIP preview ──────────────────────────────────────────────────────────
+
+
+def _read_csv_header_from_bytes(data: bytes) -> list[str] | None:
+    """Read CSV header row from raw bytes. Returns None if unparseable."""
+    try:
+        text = data.decode("utf-8", errors="replace")
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                return [c.strip() for c in stripped.split(",") if c.strip()]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _read_xlsx_header_from_bytes(data: bytes) -> list[str] | None:
+    """Read the first row of an XLSX file as column names."""
+    try:
+        df = pd.read_excel(io.BytesIO(data), sheet_name=0, header=0, nrows=0)
+        return [str(c).strip() for c in df.columns]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _count_csv_rows(data: bytes) -> int | None:
+    """Count data rows in a CSV (excluding header and comment lines)."""
+    try:
+        text = data.decode("utf-8", errors="replace")
+        lines = text.strip().split("\n")
+        # Skip comment lines and header
+        data_lines = [
+            line for line in lines[1:]
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        return len(data_lines)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _count_xlsx_rows(data: bytes) -> int | None:
+    """Count data rows in an XLSX file."""
+    try:
+        df = pd.read_excel(io.BytesIO(data), sheet_name=0, header=0)
+        return int(len(df))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@router.post("/validate/zip/preview")
+async def preview_zip_contents(file: UploadFile) -> dict[str, Any]:
+    """Preview the contents of a ZIP file.
+
+    Lists all files with sizes, reads CSV/XLSX headers, classifies each
+    as emotibit/polar/markers/order_affect/vernier/unknown, and counts
+    rows where possible.
+    """
+    raw_bytes = await file.read()
+
+    if not _is_zip(raw_bytes):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is not a ZIP archive.",
+        )
+
+    files_info: list[dict[str, Any]] = []
+    classification_summary: dict[str, int] = {}
+    total_size = 0
+
+    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            basename = info.filename.split("/")[-1]
+            if not basename or basename.startswith(".") or basename.startswith("__"):
+                continue
+
+            size_bytes = info.file_size
+            size_kb = round(size_bytes / 1024, 1)
+            total_size += size_bytes
+
+            name_lower = basename.lower()
+            is_csv = name_lower.endswith(".csv")
+            is_xlsx = name_lower.endswith(".xlsx") or name_lower.endswith(".xls")
+
+            columns: list[str] | None = None
+            detected_type = "unknown"
+            n_rows: int | None = None
+
+            if is_csv or is_xlsx:
+                try:
+                    file_data = zf.read(info.filename)
+                except Exception:  # noqa: BLE001
+                    file_data = b""
+
+                if is_csv:
+                    columns = _read_csv_header_from_bytes(file_data)
+                    n_rows = _count_csv_rows(file_data)
+                elif is_xlsx:
+                    columns = _read_xlsx_header_from_bytes(file_data)
+                    n_rows = _count_xlsx_rows(file_data)
+
+                if columns:
+                    detected_type = classify_columns(columns)
+
+            entry: dict[str, Any] = {
+                "name": basename,
+                "size_kb": size_kb,
+                "detected_type": detected_type,
+                "columns": columns,
+                "n_rows": n_rows,
+            }
+            files_info.append(entry)
+            classification_summary[detected_type] = (
+                classification_summary.get(detected_type, 0) + 1
+            )
+
+    return {
+        "files": files_info,
+        "total_size_kb": round(total_size / 1024, 1),
+        "classification_summary": classification_summary,
+    }
 

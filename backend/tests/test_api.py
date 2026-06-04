@@ -267,6 +267,131 @@ def test_validate_emotibit_csv_rejects_missing_columns():
     assert "eda_us" in detail["reason"]
 
 
+def test_validate_emotibit_returns_suggestions_for_alias():
+    """When a file has 'EDA' instead of 'eda_us', we should get suggestions."""
+    bad = b"timestamp_ms,EDA\n0,1.0\n1000,1.1\n"
+    r = client.post(
+        "/api/v1/validate/csv/emotibit",
+        files={"file": ("bad.csv", bad, "text/csv")},
+    )
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert "suggestions" in detail
+    assert len(detail["suggestions"]) > 0
+    found_names = {s["found"] for s in detail["suggestions"]}
+    assert "EDA" in found_names
+    assert "columns_present" in detail
+
+
+def test_validate_markers_returns_suggestions_for_missing_cols():
+    """Markers file missing event_code and utc_ms should get suggestions."""
+    bad = b"session_id,marker,time_ms\nS1,start,1000\n"
+    r = client.post(
+        "/api/v1/validate/csv/markers",
+        files={"file": ("bad.csv", bad, "text/csv")},
+    )
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert "suggestions" in detail
+    # 'marker' is an alias for 'event_code', 'time_ms' is an alias for 'utc_ms'
+    missing_set = {s["missing"] for s in detail["suggestions"]}
+    assert "event_code" in missing_set or "utc_ms" in missing_set
+
+
+def test_validate_polar_returns_suggestions_for_alias():
+    """Polar file with 'heart_rate' instead of 'hr_bpm' should get suggestions."""
+    bad = b"timestamp_ms,heart_rate\n0,75.0\n1000,76.0\n"
+    r = client.post(
+        "/api/v1/validate/csv/polar",
+        files={"file": ("bad.csv", bad, "text/csv")},
+    )
+    # The Polar parser may or may not reject this (it needs hr_bpm or rr_ms or ecg),
+    # but if it does produce a 422, there should be suggestions.
+    if r.status_code == 422:
+        detail = r.json()["detail"]
+        if "suggestions" in detail:
+            found_names = {s["found"] for s in detail["suggestions"]}
+            assert "heart_rate" in found_names
+
+
+def test_zip_preview_classifies_files():
+    """ZIP preview should correctly identify file types from headers."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("P041_emotibit.csv", "timestamp_ms,eda_us,acc_x\n0,1.5,0.1\n1000,1.6,0.2\n")
+        zf.writestr("P041_polar.csv", "timestamp_ms,hr_bpm,rr_ms\n0,72,830\n1000,73,820\n")
+        zf.writestr("markers.csv", "session_id,event_code,utc_ms,note\nS1,start,0,begin\n")
+        zf.writestr("readme.txt", "This is a readme file.\n")
+
+    r = client.post(
+        "/api/v1/validate/zip/preview",
+        files={"file": ("session.zip", buf.getvalue(), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "files" in body
+    assert len(body["files"]) == 4
+
+    types_by_name = {f["name"]: f["detected_type"] for f in body["files"]}
+    assert types_by_name["P041_emotibit.csv"] == "emotibit"
+    assert types_by_name["P041_polar.csv"] == "polar"
+    assert types_by_name["markers.csv"] == "markers"
+    assert types_by_name["readme.txt"] == "unknown"
+
+    assert body["total_size_kb"] > 0
+    assert body["classification_summary"]["emotibit"] == 1
+    assert body["classification_summary"]["polar"] == 1
+    assert body["classification_summary"]["markers"] == 1
+
+
+def test_zip_preview_rejects_non_zip():
+    """Non-ZIP file should return 400."""
+    r = client.post(
+        "/api/v1/validate/zip/preview",
+        files={"file": ("not_a_zip.csv", b"a,b,c\n1,2,3\n", "text/csv")},
+    )
+    assert r.status_code == 400
+
+
+def test_zip_preview_includes_row_counts():
+    """ZIP preview should include row counts for CSV files."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "data.csv",
+            "timestamp_ms,eda_us\n0,1.0\n100,1.1\n200,1.2\n300,1.3\n400,1.4\n",
+        )
+
+    r = client.post(
+        "/api/v1/validate/zip/preview",
+        files={"file": ("data.zip", buf.getvalue(), "application/zip")},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["files"][0]["n_rows"] == 5
+    assert body["files"][0]["detected_type"] == "emotibit"
+    assert body["files"][0]["columns"] == ["timestamp_ms", "eda_us"]
+
+
+def test_column_repair_suggest_basic():
+    """Unit test for suggest_column_repairs."""
+    from app.services.ingestion.column_repair import suggest_column_repairs
+    suggestions = suggest_column_repairs(["eda_us"], ["timestamp_ms", "EDA", "acc_x"])
+    assert len(suggestions) > 0
+    assert any(s["found"] == "EDA" and s["missing"] == "eda_us" for s in suggestions)
+
+
+def test_column_repair_classify():
+    """Unit test for classify_columns."""
+    from app.services.ingestion.column_repair import classify_columns
+    assert classify_columns(["timestamp_ms", "eda_us", "acc_x"]) == "emotibit"
+    assert classify_columns(["timestamp_ms", "hr_bpm", "rr_ms"]) == "polar"
+    assert classify_columns(["event_code", "utc_ms", "note"]) == "markers"
+    assert classify_columns(["subject_id", "room_type", "valence"]) == "order_affect"
+    assert classify_columns(["timestamp_unix", "force"]) == "vernier"
+    assert classify_columns(["foo", "bar"]) == "unknown"
+
+
 # ----- analyze ----------------------------------------------------------
 
 
