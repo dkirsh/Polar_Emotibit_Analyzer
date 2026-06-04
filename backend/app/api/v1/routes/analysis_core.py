@@ -82,6 +82,7 @@ async def analyze(
     polar_file: UploadFile,
     markers_file: Optional[UploadFile] = None,
     order_affect_file: Optional[UploadFile] = None,
+    vernier_file: Optional[UploadFile] = None,
     session_id: str = Form(...),
     subject_id: str = Form(...),
     study_id: str = Form(...),
@@ -513,6 +514,25 @@ async def analyze(
             log.warning("Condition aggregate computation failed: %s", exc)
             condition_aggregate = None
 
+    # Parse Vernier respiration belt file if provided
+    vernier_result: Optional[dict[str, Any]] = None
+    if vernier_file is not None:
+        try:
+            from app.services.ingestion.vernier_parser import parse_and_analyze_vernier
+            vern_raw = await vernier_file.read()
+            vern_parsed = parse_and_analyze_vernier(vern_raw)
+            vernier_result = {
+                "n_samples": vern_parsed.metadata.get("n_resampled", 0),
+                "duration_s": vern_parsed.metadata.get("duration_s", 0),
+                "sample_rate_hz": vern_parsed.metadata.get("sample_rate_hz", 20),
+                "event_markers": vern_parsed.event_markers,
+                "metadata": vern_parsed.metadata,
+                "respiratory_features": vern_parsed.respiratory_features,
+            }
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Vernier file processing failed: %s", exc)
+            vernier_result = {"error": f"Vernier file could not be parsed: {exc}"}
+
     # Persist in the in-process store keyed by session_id (latest-wins).
     analysis_id = str(uuid.uuid4())
     stored = {
@@ -530,6 +550,7 @@ async def analyze(
         "order_affect": order_affect_data,
         "room_stats": room_stats,
         "condition_aggregate": condition_aggregate,
+        "vernier": vernier_result,
     }
     _SESSION_STORE[session_id] = stored
     _persist_store()
