@@ -53,6 +53,25 @@ def _persist_store() -> None:
         log.warning("Could not persist session store to %s: %s", _STORE_PATH, exc)
 
 
+_session_store_initialized = False
+
+
+def init_session_store() -> None:
+    """Explicitly load the session store from disk.
+
+    Called from the FastAPI lifespan handler, NOT at import time.
+    Idempotent — safe to call more than once.
+    """
+    global _session_store_initialized
+    if _session_store_initialized:
+        return
+    _load_store_from_disk()
+    _migrate_stored_sessions()
+    if _SESSION_STORE:
+        _persist_store()
+    _session_store_initialized = True
+
+
 def _migrate_stored_sessions() -> bool:
     """Upgrade older stored sessions to the current frontend contract."""
     changed = False
@@ -132,7 +151,9 @@ def _maybe_backfill_edr_proxy(record: dict[str, Any]) -> bool:
     return changed
 
 
-_load_store_from_disk()
+# NOTE: _load_store_from_disk() is NOT called here at module level.
+# It is called explicitly by init_session_store() during FastAPI startup.
+# This prevents importing this module from triggering filesystem I/O.
 
 
 # ----- Helper functions --------------------------------------------------

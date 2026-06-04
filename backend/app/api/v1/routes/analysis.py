@@ -28,6 +28,7 @@ from app.api.v1.routes.analysis_export import router as _export_router
 from app.api.v1.routes.analysis_helpers import (  # noqa: F401
     _SESSION_STORE,
     _STORE_PATH,
+    _session_store_initialized,
     _baseline_window_stress_v2,
     _empty_stats,
     _filter_markers_to_data_range,
@@ -43,6 +44,7 @@ from app.api.v1.routes.analysis_helpers import (  # noqa: F401
     _stress_v2_components,
     _subsample_timeseries,
     _summary_stats,
+    init_session_store,
 )
 
 # Composite router that merges all sub-module routes.
