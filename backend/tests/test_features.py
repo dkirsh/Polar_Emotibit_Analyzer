@@ -245,3 +245,61 @@ def test_hrv_accel_mismatched_lengths():
     # Should not crash and should process successfully
     assert result["rr_total"] > 0
     assert result["movement_artifact_ratio"] >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# Synthetic EDA at 15 Hz (T7)
+# ---------------------------------------------------------------------------
+
+
+def test_synthetic_emotibit_is_15hz():
+    """The synthetic EmotiBit generator must produce data at 15 Hz."""
+    from app.services.ingestion.synthetic import EMOTIBIT_SAMPLE_HZ, generate_synthetic_session
+
+    assert EMOTIBIT_SAMPLE_HZ == 15
+
+    emo, polar = generate_synthetic_session(seconds=60)
+    # 60 seconds * 15 Hz = 900 samples
+    assert len(emo) == 60 * 15
+    # Polar stays at 1 Hz
+    assert len(polar) == 60
+
+
+@pytest.mark.parametrize("seconds,expected_samples", [
+    (10, 10 * 15),
+    (60, 60 * 15),
+    (180, 180 * 15),
+    (300, 300 * 15),
+])
+def test_synthetic_exact_sample_counts(seconds, expected_samples):
+    """Verify exact sample counts at 15 Hz for various durations."""
+    from app.services.ingestion.synthetic import generate_synthetic_session
+    emo, _ = generate_synthetic_session(seconds=seconds)
+    assert len(emo) == expected_samples, (
+        f"Expected {expected_samples} samples for {seconds}s at 15 Hz, got {len(emo)}"
+    )
+
+
+def test_synthetic_15hz_eda_features_valid():
+    """Downstream EDA feature extraction produces valid results on 15 Hz synthetic data."""
+    from app.services.ingestion.synthetic import generate_synthetic_session
+    from app.services.processing.features import compute_eda_features
+
+    emo, _ = generate_synthetic_session(seconds=60)
+    tonic, phasic = compute_eda_features(emo)
+    assert tonic > 0, "EDA tonic mean should be positive"
+    assert phasic >= 0, "EDA phasic index should be non-negative"
+
+
+def test_synthetic_15hz_timestamp_spacing():
+    """Verify that EmotiBit timestamps are spaced at ~66.67 ms (1000/15)."""
+    from app.services.ingestion.synthetic import generate_synthetic_session
+    emo, _ = generate_synthetic_session(seconds=10)
+    ts = emo["timestamp_ms"].to_numpy()
+    diffs = np.diff(ts)
+    expected_dt = int(1000.0 / 15)  # 66 ms
+    # All diffs should be either 66 or 67 ms (integer rounding of 66.667)
+    assert np.all((diffs >= 66) & (diffs <= 67)), (
+        f"Unexpected timestamp spacing: min={diffs.min()}, max={diffs.max()}"
+    )
+
