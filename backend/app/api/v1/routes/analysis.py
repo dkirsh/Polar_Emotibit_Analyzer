@@ -129,7 +129,7 @@ def _maybe_backfill_edr_proxy(record: dict[str, Any]) -> bool:
         rr_series = extended.get("rr_series_ms")
         if not isinstance(rr_series, list) or len(rr_series) < 30:
             return changed
-        edr_proxy = compute_edr_detailed_from_rr_ms(rr_series)
+        edr_proxy = compute_edr_detailed_from_rr_ms(rr_series, rr_source=rr_source)
         if not edr_proxy.get("time_s"):
             return changed
         extended["edr_proxy"] = edr_proxy

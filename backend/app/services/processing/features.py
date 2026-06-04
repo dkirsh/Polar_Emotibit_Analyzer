@@ -270,6 +270,174 @@ def lipponen_tarvainen_correction(
 
 
 # ---------------------------------------------------------------------------
+# Movement-artifact-aware HRV (Lipponen-Tarvainen + accelerometer cross-check)
+# ---------------------------------------------------------------------------
+
+def compute_hrv_features_with_accel(
+    df: pd.DataFrame,
+    *,
+    accel_threshold_g: float = 1.5,
+    epoch_duration_ms: float = 1000.0,
+) -> dict[str, float | int | None]:
+    """Compute HRV features with optional accelerometer-based movement exclusion.
+
+    Extends the Lipponen-Tarvainen ectopic correction with accelerometer
+    magnitude cross-checking. RR intervals that fall within movement-
+    flagged epochs are excluded from HRV computation entirely rather
+    than corrected, because gross body movement contaminates the chest-
+    strap signal in a way that ectopic correction cannot repair.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Merged DataFrame. Must contain ``rr_ms`` or ``hr_bpm`` for HRV.
+        Optionally contains ``acc_x``, ``acc_y``, ``acc_z`` for movement
+        flagging. If accelerometer columns are absent, behaviour is
+        identical to ``compute_hrv_features``.
+    accel_threshold_g : float, default 1.5
+        Accelerometer magnitude above which an epoch is flagged as
+        movement. 1.5 g corresponds to moderate body motion on a
+        wrist-worn sensor; the default is higher than the EDA motion
+        threshold (0.3 g in ``clean.py``) because cardiac signals
+        from a chest strap are more motion-resilient than wrist EDA.
+    epoch_duration_ms : float, default 1000.0
+        Duration of each epoch (ms) over which accelerometer magnitude
+        is averaged before thresholding.
+
+    Returns
+    -------
+    dict with keys:
+        rmssd_ms, sdnn_ms, mean_hr_bpm, rr_source,
+        rr_total, rr_excluded_movement, movement_artifact_ratio
+    """
+    # --- Step 1: Extract and correct RR intervals (L&T) ---
+    rr, source = _get_rr_intervals(df)
+    mean_hr = float(df["hr_bpm"].mean()) if "hr_bpm" in df.columns else 0.0
+
+    empty: dict[str, float | int | None] = {
+        "rmssd_ms": 0.0,
+        "sdnn_ms": 0.0,
+        "mean_hr_bpm": mean_hr,
+        "rr_source": source,
+        "rr_total": int(len(rr)),
+        "rr_excluded_movement": 0,
+        "movement_artifact_ratio": 0.0,
+    }
+
+    if len(rr) < 3:
+        return empty
+
+    # --- Step 2: Check for accelerometer columns ---
+    accel_cols = ("acc_x", "acc_y", "acc_z")
+    has_accel = all(col in df.columns for col in accel_cols)
+
+    if not has_accel:
+        # No accelerometer data: compute HRV on all RR intervals
+        diff = np.diff(rr)
+        return {
+            "rmssd_ms": float(np.sqrt(np.mean(diff ** 2))),
+            "sdnn_ms": float(np.std(rr, ddof=1)),
+            "mean_hr_bpm": mean_hr,
+            "rr_source": source,
+            "rr_total": int(len(rr)),
+            "rr_excluded_movement": 0,
+            "movement_artifact_ratio": 0.0,
+        }
+
+    # --- Step 3: Compute accelerometer magnitude per epoch ---
+    acc_x = pd.to_numeric(df["acc_x"], errors="coerce").to_numpy(dtype=float)
+    acc_y = pd.to_numeric(df["acc_y"], errors="coerce").to_numpy(dtype=float)
+    acc_z = pd.to_numeric(df["acc_z"], errors="coerce").to_numpy(dtype=float)
+    accel_mag = np.sqrt(acc_x ** 2 + acc_y ** 2 + acc_z ** 2)
+
+    # Build timestamp array for accelerometer samples
+    if "timestamp_ms" in df.columns:
+        accel_ts = pd.to_numeric(df["timestamp_ms"], errors="coerce").to_numpy(dtype=float)
+    else:
+        # Fall back to index-based timestamps at 1 kHz
+        accel_ts = np.arange(len(accel_mag), dtype=float) * (1000.0 / max(len(accel_mag), 1))
+
+    # --- Step 4: Flag movement epochs ---
+    # Divide accel timeline into epochs and flag those exceeding threshold
+    if len(accel_ts) < 2:
+        # Can't determine epochs; skip movement filtering
+        diff = np.diff(rr)
+        return {
+            "rmssd_ms": float(np.sqrt(np.mean(diff ** 2))),
+            "sdnn_ms": float(np.std(rr, ddof=1)),
+            "mean_hr_bpm": mean_hr,
+            "rr_source": source,
+            "rr_total": int(len(rr)),
+            "rr_excluded_movement": 0,
+            "movement_artifact_ratio": 0.0,
+        }
+
+    t_start = float(accel_ts[0])
+    t_end = float(accel_ts[-1])
+    n_epochs = max(1, int(np.ceil((t_end - t_start) / epoch_duration_ms)))
+
+    # Build a per-epoch max magnitude
+    epoch_boundaries = np.linspace(t_start, t_end, n_epochs + 1)
+    movement_flags = np.zeros(n_epochs, dtype=bool)
+
+    for ei in range(n_epochs):
+        mask = (accel_ts >= epoch_boundaries[ei]) & (accel_ts < epoch_boundaries[ei + 1])
+        finite_vals = accel_mag[mask]
+        finite_vals = finite_vals[np.isfinite(finite_vals)]
+        if len(finite_vals) > 0 and float(np.max(finite_vals)) > accel_threshold_g:
+            movement_flags[ei] = True
+
+    # --- Step 5: Map RR intervals to epochs and exclude movement ones ---
+    # RR intervals are beat-to-beat; each RR[i] spans from beat i to i+1.
+    # Assign each RR to the epoch containing its cumulative timestamp.
+    rr_cumsum_ms = np.cumsum(rr)
+    # Offset to match accel timeline
+    if "timestamp_ms" in df.columns:
+        rr_offset = t_start
+    else:
+        rr_offset = 0.0
+    rr_abs_times = rr_cumsum_ms + rr_offset
+
+    # Determine which epoch each RR falls into
+    rr_epoch_idx = np.clip(
+        np.searchsorted(epoch_boundaries[1:], rr_abs_times, side="left"),
+        0,
+        n_epochs - 1,
+    )
+    keep_mask = ~movement_flags[rr_epoch_idx]
+
+    rr_total = int(len(rr))
+    rr_excluded = int(np.sum(~keep_mask))
+    rr_clean = rr[keep_mask]
+
+    # --- Step 6: Compute HRV on clean RR ---
+    if len(rr_clean) < 3:
+        return {
+            "rmssd_ms": 0.0,
+            "sdnn_ms": 0.0,
+            "mean_hr_bpm": mean_hr,
+            "rr_source": source,
+            "rr_total": rr_total,
+            "rr_excluded_movement": rr_excluded,
+            "movement_artifact_ratio": float(rr_excluded / rr_total) if rr_total > 0 else 0.0,
+        }
+
+    diff = np.diff(rr_clean)
+    rmssd = float(np.sqrt(np.mean(diff ** 2)))
+    sdnn = float(np.std(rr_clean, ddof=1))
+
+    return {
+        "rmssd_ms": rmssd,
+        "sdnn_ms": sdnn,
+        "mean_hr_bpm": mean_hr,
+        "rr_source": source,
+        "rr_total": rr_total,
+        "rr_excluded_movement": rr_excluded,
+        "movement_artifact_ratio": float(rr_excluded / rr_total) if rr_total > 0 else 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Time-domain HRV
 # ---------------------------------------------------------------------------
 
@@ -507,8 +675,13 @@ def _compute_edr_detailed_from_rr(
     rr: np.ndarray,
     *,
     resample_hz: float = 4.0,
+    rr_source: str | None = None,
 ) -> dict[str, object]:
     """Build an RR-derived respiration proxy from an RR series alone."""
+    _rr_source = rr_source or "unknown"
+    _rr_source_note = rr_source_note_for(_rr_source)
+    _source_confidence = rr_source_confidence_for(_rr_source)
+    _is_degraded = _rr_source == "derived_from_bpm"
     empty: dict[str, object] = {
         "mean_rpm": None,
         "rpm_std": None,
@@ -520,6 +693,8 @@ def _compute_edr_detailed_from_rr(
         "breath_intervals_s": [],
         "inspiratory_times_s": [],
         "expiratory_times_s": [],
+        "rr_source": _rr_source,
+        "rr_source_note": _rr_source_note,
         "quality": {
             "duration_s": None,
             "peak_count": 0,
@@ -529,9 +704,10 @@ def _compute_edr_detailed_from_rr(
             "interval_cv": None,
             "plausible_rate_fraction": None,
             "signal_confidence": None,
-            "source_confidence": None,
+            "source_confidence": round(float(_source_confidence), 3),
             "overall_confidence": None,
             "verdict": "insufficient",
+            "degraded": _is_degraded,
         },
         "source": "rr_edr_proxy",
     }
@@ -637,6 +813,18 @@ def _compute_edr_detailed_from_rr(
         else:
             verdict = "insufficient"
 
+        overall_confidence = round(float((signal_confidence + _source_confidence) / 2.0), 3)
+        if _is_degraded and verdict in ("strong", "usable"):
+            verdict = "weak"  # demote when RR is BPM-derived
+        if overall_confidence >= 0.8:
+            overall_verdict = "strong"
+        elif overall_confidence >= 0.6:
+            overall_verdict = "usable"
+        elif overall_confidence >= 0.4:
+            overall_verdict = "weak"
+        else:
+            overall_verdict = "insufficient"
+
         return {
             "mean_rpm": round(float(np.mean(inst_rpm)), 2),
             "rpm_std": round(float(np.std(inst_rpm, ddof=1)), 2), # Respiration Rate Variability
@@ -648,6 +836,8 @@ def _compute_edr_detailed_from_rr(
             "breath_intervals_s": breath_intervals.tolist(),
             "inspiratory_times_s": inspiratory_times,
             "expiratory_times_s": expiratory_times,
+            "rr_source": _rr_source,
+            "rr_source_note": _rr_source_note,
             "quality": {
                 "duration_s": round(duration_s, 2),
                 "peak_count": int(len(peak_times)),
@@ -657,9 +847,10 @@ def _compute_edr_detailed_from_rr(
                 "interval_cv": round(interval_cv, 3) if interval_cv is not None else None,
                 "plausible_rate_fraction": round(plausibility_score, 3) if plausible_rate_fraction is not None else None,
                 "signal_confidence": round(signal_confidence, 3),
-                "source_confidence": None,
-                "overall_confidence": None,
-                "verdict": verdict,
+                "source_confidence": round(float(_source_confidence), 3),
+                "overall_confidence": overall_confidence,
+                "verdict": overall_verdict,
+                "degraded": _is_degraded,
             },
             "source": "rr_edr_proxy",
         }
@@ -675,17 +866,18 @@ def compute_edr_detailed(df: pd.DataFrame, resample_hz: float = 4.0) -> dict[str
     coarse breath-cycle timing diagnostics, but not for strong claims about
     detailed breath morphology.
     """
-    rr, _ = _get_rr_intervals(df)
-    return _compute_edr_detailed_from_rr(rr, resample_hz=resample_hz)
+    rr, source = _get_rr_intervals(df)
+    return _compute_edr_detailed_from_rr(rr, resample_hz=resample_hz, rr_source=source)
 
 
 def compute_edr_detailed_from_rr_ms(
     rr_intervals_ms: list[float] | np.ndarray,
     resample_hz: float = 4.0,
+    rr_source: str | None = None,
 ) -> dict[str, object]:
     """Reconstruct the respiration proxy from stored RR intervals."""
     rr = np.asarray(rr_intervals_ms, dtype=float)
-    return _compute_edr_detailed_from_rr(rr, resample_hz=resample_hz)
+    return _compute_edr_detailed_from_rr(rr, resample_hz=resample_hz, rr_source=rr_source)
 
 
 def compute_edr(df: pd.DataFrame, resample_hz: float = 4.0) -> dict[str, float | None]:
