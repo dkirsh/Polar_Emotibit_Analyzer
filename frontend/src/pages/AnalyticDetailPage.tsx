@@ -102,8 +102,8 @@ export const AnalyticDetailPage: React.FC = () => {
           clone.setAttribute("height", `${Math.ceil(vh + pad * 2)}`);
         }
       } else {
-        const w = svg.clientWidth || svg.offsetWidth || 920;
-        const h = svg.clientHeight || svg.offsetHeight || 430;
+        const w = svg.clientWidth || (svg as unknown as HTMLElement).offsetWidth || 920;
+        const h = svg.clientHeight || (svg as unknown as HTMLElement).offsetHeight || 430;
         clone.setAttribute("viewBox", `${-pad} ${-pad} ${w + pad * 2} ${h + pad * 2}`);
         clone.setAttribute("width", `${Math.ceil(w + pad * 2)}`);
         clone.setAttribute("height", `${Math.ceil(h + pad * 2)}`);
