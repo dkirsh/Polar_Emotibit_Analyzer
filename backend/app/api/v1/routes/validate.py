@@ -358,3 +358,49 @@ async def validate_order_affect_csv_endpoint(file: UploadFile) -> CsvValidationR
         valence_range=info["valence_range"],
         arousal_range=info["arousal_range"],
     )
+
+
+# ── Vernier ───────────────────────────────────────────────────
+
+
+@router.post("/validate/csv/vernier", response_model=CsvValidationResponse)
+async def validate_vernier_xlsx(file: UploadFile) -> CsvValidationResponse:
+    """Validate a Vernier respiration-belt Excel file (.xlsx).
+
+    Parses the file, checks for required columns (timestamp_unix, force),
+    resamples to 20 Hz, and returns metadata about the recording.
+    """
+    from app.services.ingestion.vernier_parser import parse_vernier_xlsx
+
+    raw_bytes = await file.read()
+
+    try:
+        result = parse_vernier_xlsx(raw_bytes)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"valid": False, "reason": str(exc)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"valid": False, "reason": f"Parse error: {exc.__class__.__name__}: {exc}"},
+        )
+
+    md = result.metadata
+    rr_val = md.get("rr_validation")
+
+    return CsvValidationResponse(
+        valid=True,
+        filename=file.filename,
+        n_rows=md["n_raw_samples"],
+        columns_present=md["columns_present"],
+        sample_rate_hz=md["sample_rate_hz"],
+        duration_s=md["duration_s"],
+        duration_min=md["duration_min"],
+        conditions=md.get("conditions"),
+        n_event_markers=md["n_event_markers"],
+        n_resampled=md["n_resampled"],
+        vendor_rr_median=rr_val["vendor_rr_median"] if rr_val else None,
+    )
+

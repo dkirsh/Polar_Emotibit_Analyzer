@@ -98,6 +98,15 @@ class CsvValidationResponse(BaseModel):
     valence_range: dict[str, float | None] | None = None
     arousal_range: dict[str, float | None] | None = None
 
+    # Vernier respiration belt-specific
+    sample_rate_hz: int | None = None
+    duration_s: float | None = None
+    duration_min: float | None = None
+    conditions: list[str] | None = None
+    n_event_markers: int | None = None
+    n_resampled: int | None = None
+    vendor_rr_median: float | None = None
+
 
 class IngestionSummary(BaseModel):
     """Result of parsing raw files."""

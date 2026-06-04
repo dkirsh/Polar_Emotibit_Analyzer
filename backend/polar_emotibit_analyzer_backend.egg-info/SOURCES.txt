@@ -6,6 +6,7 @@ app/api/__init__.py
 app/api/v1/__init__.py
 app/api/v1/routes/__init__.py
 app/api/v1/routes/analysis.py
+app/api/v1/routes/analysis_helpers.py
 app/api/v1/routes/validate.py
 app/core/__init__.py
 app/core/config.py
@@ -17,10 +18,13 @@ app/schemas/analysis.py
 app/services/__init__.py
 app/services/ai/__init__.py
 app/services/ai/adapters.py
+app/services/cohort/__init__.py
+app/services/cohort/partition.py
 app/services/ingestion/__init__.py
 app/services/ingestion/order_affect.py
 app/services/ingestion/parsers.py
 app/services/ingestion/synthetic.py
+app/services/ingestion/vernier_parser.py
 app/services/ingestion/zip_ingestion.py
 app/services/processing/__init__.py
 app/services/processing/benchmark.py
@@ -44,6 +48,7 @@ polar_emotibit_analyzer_backend.egg-info/dependency_links.txt
 polar_emotibit_analyzer_backend.egg-info/requires.txt
 polar_emotibit_analyzer_backend.egg-info/top_level.txt
 tests/test_api.py
+tests/test_cohort_e2e.py
 tests/test_features.py
 tests/test_parsers.py
 tests/test_real_data_audit.py

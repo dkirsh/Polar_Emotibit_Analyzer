@@ -1,0 +1,19 @@
+session_id,event_code,utc_ms,note
+TEST_001,recording_start,1715000000000,session begin
+TEST_001,baseline_onset,1715000030000,entering baseline
+TEST_001,baseline_offset,1715000150000,leaving baseline
+TEST_001,room1_onset,1715000180000,entering room1
+TEST_001,room1_offset,1715000360000,leaving room1
+TEST_001,room2_onset,1715000390000,entering room2
+TEST_001,room2_offset,1715000570000,leaving room2
+TEST_001,room3_onset,1715000600000,entering room3
+TEST_001,room3_offset,1715000780000,leaving room3
+TEST_001,room4_onset,1715000810000,entering room4
+TEST_001,room4_offset,1715000990000,leaving room4
+TEST_001,room5_onset,1715001020000,entering room5
+TEST_001,room5_offset,1715001200000,leaving room5
+TEST_001,room6_onset,1715001230000,entering room6
+TEST_001,room6_offset,1715001410000,leaving room6
+TEST_001,room7_onset,1715001440000,entering room7
+TEST_001,room7_offset,1715001620000,leaving room7
+TEST_001,recording_end,1715002400000,session end

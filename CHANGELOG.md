@@ -4,6 +4,125 @@ All notable changes to the Polar-EmotiBit Analyzer are recorded here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] — 2026-06-04
+
+Vernier respiration-belt integration and Estelita script fixes.
+
+### Added
+
+- **Vernier respiration-belt parser**: new `vernier_parser.py` module in
+  `backend/app/services/ingestion/` that reads Vernier respiration-belt
+  `.xlsx` exports with columns: `timestamp_unix`, `force`, plus optional
+  `timestamp`, `RR`, `event_marker`, `condition`. Resamples to uniform
+  20 Hz grid and runs the RespInPeace ALS baseline removal + cycle
+  detection pipeline. Outputs per-breath features (inhale/exhale
+  duration, I:E ratio, duty cycle, amplitude, respiratory rate).
+- **Validation endpoint**: `POST /api/v1/validate/csv/vernier` — schema
+  validation for Vernier Excel files. Returns sample rate, duration,
+  conditions, event markers, and vendor RR statistics.
+- **Analysis endpoint update**: `POST /api/v1/analyze` now accepts an
+  optional `vernier_file` upload. Parsed Vernier data (metadata, event
+  markers, respiratory features) is stored alongside the session.
+- **Frontend upload slot**: fifth drop-zone on the StartPage for
+  Vernier `.xlsx` files. Shows recording duration, sample rate, and
+  vendor RR statistics after validation.
+- **Ingestion contract**: `contracts/VERNIER_INGESTION_CONTRACT_2026-06-04.md`
+  defining accepted formats, output schema, validation rules, error
+  codes, API surface, frontend slot specification, and backward
+  compatibility guarantee.
+- **Vernier test suite**: 23 new tests in `tests/test_vernier_parser.py`
+  covering happy path, resampling, event markers, conditions, vendor
+  RR, minimal columns, adversarial error handling (empty file, missing
+  columns, NaN-heavy, zero-duration, corrupted, single row),
+  respiratory feature extraction, mixed-frequency resampling, and HTTP
+  endpoint round-trips.
+
+### Fixed
+
+- **Estelita `analyze.py` HERE bug**: `HERE` variable was used before
+  definition (on `sys.path.insert`) causing a `NameError` at import
+  time. Moved `HERE = os.path.dirname(...)` before its first usage.
+
+## [2.3.0] — 2026-06-04
+
+Movement-artifact-aware HRV and synthetic data fidelity.
+
+### Added
+
+- **Movement-artifact-aware HRV**: new `compute_hrv_features_with_accel`
+  function in `features.py`. Extends the Lipponen-Tarvainen (2019) ectopic
+  correction with accelerometer cross-checking. When `acc_x`, `acc_y`,
+  `acc_z` columns are present, epochs where accelerometer magnitude
+  exceeds a configurable threshold (default 1.5 g) are flagged as
+  movement artifacts, and RR intervals falling within those epochs are
+  excluded from HRV computation. Output includes `rr_total`,
+  `rr_excluded_movement`, and `movement_artifact_ratio` fields.
+  Backward-compatible: when no accelerometer columns are present,
+  behaviour is identical to `compute_hrv_features`.
+- **Movement artifact tests**: 7 new tests covering no-movement
+  passthrough, movement spike exclusion, ratio computation, all-movement
+  adversarial case, borderline threshold, no-accel-columns fallback,
+  and mismatched timestamp lengths.
+- **Synthetic 15 Hz tests**: 7 new tests verifying exact sample counts
+  at 15 Hz for various durations, timestamp spacing, and downstream
+  EDA feature validity.
+
+### Fixed
+
+- **Synthetic EDA sampling rate**: `generate_synthetic_session` now
+  generates EmotiBit data at 15 Hz (was 1 Hz) to match the real
+  EmotiBit hardware sampling rate. Polar HR remains at 1 Hz. Motion
+  burst injection scaled to the 15 Hz sample count.
+
+## [2.2.1] — 2026-06-04
+
+Five targeted quick-fixes addressing build metadata, import-time side
+effects, script bugs, provenance propagation, and frontend export
+robustness. Each fix has a corresponding contract in `contracts/` and
+adversarial tests in `backend/tests/test_quickfixes.py`.
+
+### Fixed
+
+- **T1 — pyproject.toml readme path.** The `readme = "README.md"`
+  field referenced a file that doesn't exist in `backend/`. Changed
+  to inline text form so `pip install -e '.[dev]'` succeeds without
+  warnings.
+
+- **T2 — Import-time session_store.json side effect.** Importing the
+  analysis router called `_load_store_from_disk()` at module level,
+  which could read and rewrite `session_store.json` just from an
+  import. Moved to an explicit `init_session_store()` function called
+  from a FastAPI `lifespan` startup hook.
+
+- **T3 — Estelita analyze.py `HERE` bug.** `HERE` was used on line 24
+  (`sys.path.insert(0, HERE)`) but defined on line 32. Moved the
+  definition before the first use.
+
+- **T4 — EDR proxy `rr_source` propagation.** `compute_edr_detailed()`
+  discarded the RR source with `rr, _ = _get_rr_intervals(df)`. Now
+  captures and propagates `rr_source`, `rr_source_note`, and
+  `source_confidence` into the EDR output. When RR is derived from
+  BPM, the quality is flagged as `degraded: True` and the verdict is
+  capped at "weak".
+
+- **T5 — SVG export `getBBox()` fallback.** The `catch` block after
+  `getBBox()` was empty, so SVG exports could lack proper dimensions
+  when the element wasn't fully rendered. Added a three-tier fallback:
+  existing `viewBox` → `clientWidth`/`offsetHeight` → hardcoded
+  920×430 defaults.
+
+### Added
+
+- **Contracts**: five new module-level contracts in `contracts/`:
+  `BUILD_METADATA_CONTRACT_2026-06-04.md`,
+  `SESSION_STORE_INIT_CONTRACT_2026-06-04.md`,
+  `ESTELITA_ANALYZE_CONTRACT_2026-06-04.md`,
+  `EDR_RR_PROVENANCE_CONTRACT_2026-06-04.md`,
+  `SVG_EXPORT_CONTRACT_2026-06-04.md`.
+
+- **Adversarial tests**: `backend/tests/test_quickfixes.py` with 14
+  tests that actively try to break each fix.
+
 ## [2.2.0] — 2026-04-22
 
 Kubios-parity pass. Pipeline now reproduces the Kubios HRV Premium

@@ -9,10 +9,12 @@ import {
   ValidateMarkersResponse,
   ValidateOrderAffectResponse,
   ValidatePolarResponse,
+  ValidateVernierResponse,
   validateEmotibitCsv,
   validateMarkersCsv,
   validateOrderAffectCsv,
   validatePolarCsv,
+  validateVernierXlsx,
 } from "../api";
 
 type FileSlotState<T> =
@@ -30,7 +32,7 @@ type SavedSettings = {
   notes: string;
 };
 
-type UploadSlot = "em" | "pol" | "mk" | "oa";
+type UploadSlot = "em" | "pol" | "mk" | "oa" | "vn";
 
 const SETTINGS_KEY = "polar-emotibit:last-settings";
 
@@ -62,6 +64,7 @@ const draft = {
   polar: { file: null } as FileSlotState<ValidatePolarResponse>,
   markers: { file: null } as FileSlotState<ValidateMarkersResponse>,
   orderAffect: { file: null } as FileSlotState<ValidateOrderAffectResponse>,
+  vernier: { file: null } as FileSlotState<ValidateVernierResponse>,
 };
 
 /**
@@ -91,6 +94,7 @@ export const StartPage: React.FC = () => {
   const [polar, setPolar] = useState<FileSlotState<ValidatePolarResponse>>(draft.polar);
   const [markers, setMarkers] = useState<FileSlotState<ValidateMarkersResponse>>(draft.markers);
   const [orderAffect, setOrderAffect] = useState<FileSlotState<ValidateOrderAffectResponse>>(draft.orderAffect);
+  const [vernier, setVernier] = useState<FileSlotState<ValidateVernierResponse>>(draft.vernier);
 
   // Submit state
   const [submitting, setSubmitting] = useState(false);
@@ -111,6 +115,7 @@ export const StartPage: React.FC = () => {
   useEffect(() => { draft.polar = polar; }, [polar]);
   useEffect(() => { draft.markers = markers; }, [markers]);
   useEffect(() => { draft.orderAffect = orderAffect; }, [orderAffect]);
+  useEffect(() => { draft.vernier = vernier; }, [vernier]);
 
   const hasValidEmotibit = emotibit.file !== null && "status" in emotibit && emotibit.status === "valid";
   const hasValidPolar = polar.file !== null && "status" in polar && polar.status === "valid";
@@ -120,7 +125,7 @@ export const StartPage: React.FC = () => {
       which: UploadSlot,
       file: File,
     ) => {
-      const existing = which === "em" ? emotibit.file : which === "pol" ? polar.file : which === "mk" ? markers.file : orderAffect.file;
+      const existing = which === "em" ? emotibit.file : which === "pol" ? polar.file : which === "mk" ? markers.file : which === "oa" ? orderAffect.file : vernier.file;
       if (existing && !window.confirm(`${slotLabel(which)} already contains ${existing.name}. Replace it with ${file.name}?`)) {
         return;
       }
@@ -131,7 +136,8 @@ export const StartPage: React.FC = () => {
         if (which === "em") setEmotibit(invalid);
         else if (which === "pol") setPolar(invalid);
         else if (which === "mk") setMarkers(invalid);
-        else setOrderAffect(invalid);
+        else if (which === "oa") setOrderAffect(invalid);
+        else setVernier(invalid);
         return;
       }
       if (localCheck.confirm && !window.confirm(localCheck.confirm)) {
@@ -150,13 +156,17 @@ export const StartPage: React.FC = () => {
         setMarkers({ file, status: "validating" });
         try { setMarkers({ file, status: "valid", info: await validateMarkersCsv(file) }); }
         catch (e) { setMarkers({ file, status: "invalid", error: (e as Error).message }); }
-      } else {
+      } else if (which === "oa") {
         setOrderAffect({ file, status: "validating" });
         try { setOrderAffect({ file, status: "valid", info: await validateOrderAffectCsv(file) }); }
         catch (e) { setOrderAffect({ file, status: "invalid", error: (e as Error).message }); }
+      } else {
+        setVernier({ file, status: "validating" });
+        try { setVernier({ file, status: "valid", info: await validateVernierXlsx(file) }); }
+        catch (e) { setVernier({ file, status: "invalid", error: (e as Error).message }); }
       }
     },
-    [emotibit.file, markers.file, polar.file, orderAffect.file],
+    [emotibit.file, markers.file, polar.file, orderAffect.file, vernier.file],
   );
 
   const submitEnabled =
@@ -181,6 +191,7 @@ export const StartPage: React.FC = () => {
           polar_file: polar.file!,
           markers_file: markers.file ?? null,
           order_affect_file: orderAffect.file ?? null,
+          vernier_file: vernier.file ?? null,
           session_id: sessionId.trim(),
           subject_id: subjectId.trim(),
           study_id: studyId.trim(),
@@ -311,6 +322,16 @@ export const StartPage: React.FC = () => {
               `${info.n_rooms ?? 0} rooms · subject ${info.subject_id_detected ?? "?"} · types: ${(info.room_types ?? []).join(", ") || "none"}`
             }
           />
+          <DropSlot
+            label="Vernier Respiration Belt XLSX (respiratory force)"
+            required={false}
+            state={vernier}
+            onFile={(f) => onDropFile("vn", f)}
+            onClear={() => setVernier({ file: null })}
+            describeInfo={(info) =>
+              `${info.n_rows} samples · ${info.duration_min?.toFixed(1) ?? "?"}min · ${info.sample_rate_hz}Hz resampled${info.vendor_rr_median ? ` · vendor RR ${info.vendor_rr_median} bpm` : ""}`
+            }
+          />
 
           <button className="submit-btn" disabled={!submitEnabled} onClick={onSubmit}
                   aria-busy={submitting}>
@@ -377,7 +398,8 @@ function slotLabel(which: UploadSlot): string {
   if (which === "em") return "EmotiBit slot";
   if (which === "pol") return "Polar slot";
   if (which === "mk") return "Event markers slot";
-  return "Order & Affect slot";
+  if (which === "oa") return "Order & Affect slot";
+  return "Vernier respiration slot";
 }
 
 async function checkFileForSlot(
@@ -450,6 +472,13 @@ async function checkFileForSlot(
     }
   }
 
+  if (which === "vn") {
+    if (!name.endsWith(".xlsx") && !name.endsWith(".xls")) {
+      return { ok: true, confirm: `${file.name} is not named as an Excel file (.xlsx). Vernier belt data should be in .xlsx format. Try it anyway?` };
+    }
+    return { ok: true };
+  }
+
   if (!name.endsWith(".csv") && !name.endsWith(".zip")) {
     return { ok: true, confirm: `${file.name} is not named as a .csv or .zip file. Try it anyway?` };
   }
@@ -494,7 +523,7 @@ function DropSlot<T>({
   const openPicker = () => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".csv,.zip,text/csv,application/zip";
+    input.accept = ".csv,.zip,.xlsx,text/csv,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     input.onchange = () => { if (input.files?.[0]) onFile(input.files[0]); };
     input.click();
   };

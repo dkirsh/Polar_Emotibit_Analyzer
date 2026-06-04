@@ -102,6 +102,20 @@ export type ValidateOrderAffectResponse = {
   arousal_range: { min: number | null; max: number | null } | null;
 };
 
+export type ValidateVernierResponse = {
+  valid: true;
+  filename: string;
+  n_rows: number;
+  columns_present: string[];
+  sample_rate_hz: number;
+  duration_s: number;
+  duration_min: number;
+  conditions: string[] | null;
+  n_event_markers: number;
+  n_resampled: number;
+  vendor_rr_median: number | null;
+};
+
 export type RecentSession = {
   session_id: string;
   subject_id: string;
@@ -343,12 +357,16 @@ export async function validateMarkersCsv(file: File) {
 export async function validateOrderAffectCsv(file: File) {
   return postFile<ValidateOrderAffectResponse>("/api/v1/validate/csv/order_affect", file);
 }
+export async function validateVernierXlsx(file: File) {
+  return postFile<ValidateVernierResponse>("/api/v1/validate/csv/vernier", file);
+}
 
 export type AnalyzePayload = {
   emotibit_file: File;
   polar_file: File;
   markers_file?: File | null;
   order_affect_file?: File | null;
+  vernier_file?: File | null;
   session_id: string;
   subject_id: string;
   study_id: string;
@@ -374,6 +392,7 @@ export async function analyze(payload: AnalyzePayload): Promise<AnalysisResponse
   body.append("polar_file", payload.polar_file);
   if (payload.markers_file) body.append("markers_file", payload.markers_file);
   if (payload.order_affect_file) body.append("order_affect_file", payload.order_affect_file);
+  if (payload.vernier_file) body.append("vernier_file", payload.vernier_file);
   body.append("session_id", payload.session_id);
   body.append("subject_id", payload.subject_id);
   body.append("study_id", payload.study_id);
