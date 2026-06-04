@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   analyze,
@@ -19,9 +19,9 @@ import {
 
 type FileSlotState<T> =
   | { file: null }
-  | { file: File; status: "validating" }
-  | { file: File; status: "valid"; info: T }
-  | { file: File; status: "invalid"; error: string };
+  | { file: File; status: "validating"; preview?: string[][] }
+  | { file: File; status: "valid"; info: T; preview?: string[][] }
+  | { file: File; status: "invalid"; error: string; preview?: string[][] };
 
 type SavedSettings = {
   sessionId: string;
@@ -33,6 +33,15 @@ type SavedSettings = {
 };
 
 type UploadSlot = "em" | "pol" | "mk" | "oa" | "vn";
+
+type ToastState = { msg: string; type: "success" | "warn" } | null;
+
+type ReroutePrompt = {
+  file: File;
+  fromSlot: UploadSlot;
+  toSlot: UploadSlot;
+  message: string;
+} | null;
 
 const SETTINGS_KEY = "polar-emotibit:last-settings";
 
@@ -66,6 +75,68 @@ const draft = {
   orderAffect: { file: null } as FileSlotState<ValidateOrderAffectResponse>,
   vernier: { file: null } as FileSlotState<ValidateVernierResponse>,
 };
+
+/** Parse the first 6 lines of a CSV file for preview (1 header + 5 data rows). */
+function parseCsvPreview(file: File): Promise<string[][] | undefined> {
+  const name = file.name.toLowerCase();
+  // Skip non-CSV files (XLSX/ZIP) — no client-side parser for those
+  if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".zip")) {
+    return Promise.resolve(undefined);
+  }
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve(undefined);
+    reader.onload = () => {
+      const text = String(reader.result ?? "");
+      const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+      if (lines.length === 0) { resolve(undefined); return; }
+      const rows = lines.slice(0, 6).map((line) => line.split(","));
+      resolve(rows);
+    };
+    // Read first 16KB — enough for 6 lines of any reasonable CSV
+    reader.readAsText(file.slice(0, 16384));
+  });
+}
+
+/** Detect file type using header-sniffing logic. Returns the best-guess slot or null. */
+async function detectFileType(file: File): Promise<UploadSlot | null> {
+  const name = file.name.toLowerCase();
+
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+    return "vn"; // Vernier is the only XLSX slot
+  }
+
+  if (name.endsWith(".zip")) {
+    return null; // Ambiguous — ZIP could be any slot
+  }
+
+  const header = await readCsvHeader(file);
+  const columns = header.split(",").map((c) => c.trim().toLowerCase());
+  const has = (col: string) => columns.includes(col);
+  const hasAny = (cols: string[]) => cols.some(has);
+  const filenameHas = (pattern: RegExp) => pattern.test(file.name);
+
+  const looksLikeNativeEmotibit = has("localtimestamp") || filenameHas(/_E[AXYZ]\.csv$/i);
+  const looksLikeNativePolar = has("utc_epoch_ns");
+  const looksLikeMarkers = has("event_code") || has("utc_ms") || filenameHas(/(^|[_\-\s])(event|events|marker|markers|sync)([_\-\s.]|$)/i);
+  const looksLikePolar = looksLikeNativePolar || hasAny(["hr_bpm", "rr_ms", "ecg_uv", "ecg_mv", "ecg", "raw_ecg", "raw_ecg_uv", "voltage_uv", "timestamp_ns"]) || filenameHas(/polar|h10|hrv|ecg|rr/i);
+  const looksLikeEmotibit = looksLikeNativeEmotibit || has("eda_us") || hasAny(["acc_x", "acc_y", "acc_z", "resp_bpm"]) || filenameHas(/emotibit|eda|gsr/i);
+  const looksLikeOrderAffect = hasAny(["room_type", "room_order", "valence", "arousal"]) || filenameHas(/order|affect|condition/i);
+
+  // Return the most confident match, or null if ambiguous
+  const matches: UploadSlot[] = [];
+  if (looksLikeMarkers) matches.push("mk");
+  if (looksLikeEmotibit && !looksLikePolar) matches.push("em");
+  if (looksLikePolar && !looksLikeEmotibit) matches.push("pol");
+  if (looksLikeEmotibit && looksLikePolar) { matches.push("em"); matches.push("pol"); }
+  if (looksLikeOrderAffect) matches.push("oa");
+
+  if (matches.length === 1) return matches[0];
+  // Prefer markers if exclusively markers
+  if (matches.length === 0) return null;
+  // Multiple matches → ambiguous
+  return null;
+}
 
 /**
  * View 1 — New Analysis Session.
@@ -101,6 +172,17 @@ export const StartPage: React.FC = () => {
   const [submitStage, setSubmitStage] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Toast state
+  const [toast, setToast] = useState<ToastState>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Reroute modal state
+  const [reroutePrompt, setReroutePrompt] = useState<ReroutePrompt>(null);
+
+  // Page-level drag state
+  const [pageDrag, setPageDrag] = useState(false);
+  const dragCounter = useRef(0);
+
   // Recent-sessions footer
   const [recent, setRecent] = useState<RecentSession[]>([]);
   useEffect(() => { listRecentSessions(10).then(setRecent).catch(() => {}); }, []);
@@ -117,6 +199,12 @@ export const StartPage: React.FC = () => {
   useEffect(() => { draft.orderAffect = orderAffect; }, [orderAffect]);
   useEffect(() => { draft.vernier = vernier; }, [vernier]);
 
+  const showToast = useCallback((msg: string, type: "success" | "warn") => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ msg, type });
+    toastTimer.current = setTimeout(() => setToast(null), 3000);
+  }, []);
+
   const hasValidEmotibit = emotibit.file !== null && "status" in emotibit && emotibit.status === "valid";
   const hasValidPolar = polar.file !== null && "status" in polar && polar.status === "valid";
 
@@ -130,9 +218,24 @@ export const StartPage: React.FC = () => {
         return;
       }
 
+      // Parse CSV preview immediately (before server validation)
+      const preview = await parseCsvPreview(file);
+
       const localCheck = await checkFileForSlot(file, which);
       if (!localCheck.ok) {
-        const invalid = { file, status: "invalid" as const, error: localCheck.message };
+        // Instead of just blocking, detect if the file belongs elsewhere and offer to reroute
+        const detectedSlot = await detectFileType(file);
+        if (detectedSlot && detectedSlot !== which) {
+          setReroutePrompt({
+            file,
+            fromSlot: which,
+            toSlot: detectedSlot,
+            message: `This looks like a ${slotFriendlyName(detectedSlot)} file. Route to ${slotLabel(detectedSlot)} instead?`,
+          });
+          return;
+        }
+        // No reroute possible — show as invalid with preview
+        const invalid = { file, status: "invalid" as const, error: localCheck.message, preview };
         if (which === "em") setEmotibit(invalid);
         else if (which === "pol") setPolar(invalid);
         else if (which === "mk") setMarkers(invalid);
@@ -145,29 +248,56 @@ export const StartPage: React.FC = () => {
       }
 
       if (which === "em") {
-        setEmotibit({ file, status: "validating" });
-        try { setEmotibit({ file, status: "valid", info: await validateEmotibitCsv(file) }); }
-        catch (e) { setEmotibit({ file, status: "invalid", error: (e as Error).message }); }
+        setEmotibit({ file, status: "validating", preview });
+        try { setEmotibit({ file, status: "valid", info: await validateEmotibitCsv(file), preview }); }
+        catch (e) { setEmotibit({ file, status: "invalid", error: (e as Error).message, preview }); }
       } else if (which === "pol") {
-        setPolar({ file, status: "validating" });
-        try { setPolar({ file, status: "valid", info: await validatePolarCsv(file) }); }
-        catch (e) { setPolar({ file, status: "invalid", error: (e as Error).message }); }
+        setPolar({ file, status: "validating", preview });
+        try { setPolar({ file, status: "valid", info: await validatePolarCsv(file), preview }); }
+        catch (e) { setPolar({ file, status: "invalid", error: (e as Error).message, preview }); }
       } else if (which === "mk") {
-        setMarkers({ file, status: "validating" });
-        try { setMarkers({ file, status: "valid", info: await validateMarkersCsv(file) }); }
-        catch (e) { setMarkers({ file, status: "invalid", error: (e as Error).message }); }
+        setMarkers({ file, status: "validating", preview });
+        try { setMarkers({ file, status: "valid", info: await validateMarkersCsv(file), preview }); }
+        catch (e) { setMarkers({ file, status: "invalid", error: (e as Error).message, preview }); }
       } else if (which === "oa") {
-        setOrderAffect({ file, status: "validating" });
-        try { setOrderAffect({ file, status: "valid", info: await validateOrderAffectCsv(file) }); }
-        catch (e) { setOrderAffect({ file, status: "invalid", error: (e as Error).message }); }
+        setOrderAffect({ file, status: "validating", preview });
+        try { setOrderAffect({ file, status: "valid", info: await validateOrderAffectCsv(file), preview }); }
+        catch (e) { setOrderAffect({ file, status: "invalid", error: (e as Error).message, preview }); }
       } else {
-        setVernier({ file, status: "validating" });
-        try { setVernier({ file, status: "valid", info: await validateVernierXlsx(file) }); }
-        catch (e) { setVernier({ file, status: "invalid", error: (e as Error).message }); }
+        setVernier({ file, status: "validating", preview });
+        try { setVernier({ file, status: "valid", info: await validateVernierXlsx(file), preview }); }
+        catch (e) { setVernier({ file, status: "invalid", error: (e as Error).message, preview }); }
       }
     },
     [emotibit.file, markers.file, polar.file, orderAffect.file, vernier.file],
   );
+
+  /** Handle a file dropped on the page (not on a specific slot) — auto-detect and route. */
+  const onPageDrop = useCallback(
+    async (file: File) => {
+      const detectedSlot = await detectFileType(file);
+      if (detectedSlot) {
+        showToast(`✓ Detected as ${slotFriendlyName(detectedSlot)} — routed to ${slotLabel(detectedSlot)}`, "success");
+        onDropFile(detectedSlot, file);
+      } else {
+        showToast(`Could not auto-detect file type for ${file.name}. Drop it on a specific slot.`, "warn");
+      }
+    },
+    [onDropFile, showToast],
+  );
+
+  /** Handle reroute modal confirmation. */
+  const onRerouteConfirm = useCallback(() => {
+    if (!reroutePrompt) return;
+    const { file, toSlot } = reroutePrompt;
+    setReroutePrompt(null);
+    showToast(`✓ Rerouted to ${slotLabel(toSlot)}`, "success");
+    onDropFile(toSlot, file);
+  }, [reroutePrompt, onDropFile, showToast]);
+
+  const onRerouteCancel = useCallback(() => {
+    setReroutePrompt(null);
+  }, []);
 
   const submitEnabled =
     sessionId.trim().length > 0 &&
@@ -235,7 +365,50 @@ export const StartPage: React.FC = () => {
   };
 
   return (
-    <main className="page" role="main" aria-label="New analysis session">
+    <main
+      className={`page${pageDrag ? " page-drop-active" : ""}`}
+      role="main"
+      aria-label="New analysis session"
+      onDragOver={(e) => { e.preventDefault(); }}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        dragCounter.current++;
+        setPageDrag(true);
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        dragCounter.current--;
+        if (dragCounter.current <= 0) { dragCounter.current = 0; setPageDrag(false); }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        dragCounter.current = 0;
+        setPageDrag(false);
+        // Only handle if not dropped on a specific DropSlot (which stops propagation)
+        const f = e.dataTransfer.files[0];
+        if (f) onPageDrop(f);
+      }}
+    >
+      {/* Toast notification */}
+      {toast && (
+        <div className={`upload-toast ${toast.type}`} role="status" aria-live="polite">
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Reroute modal */}
+      {reroutePrompt && (
+        <div className="reroute-modal-overlay" onClick={onRerouteCancel}>
+          <div className="reroute-modal" onClick={(e) => e.stopPropagation()}>
+            <p>{reroutePrompt.message}</p>
+            <div className="reroute-modal-btns">
+              <button className="btn-yes" onClick={onRerouteConfirm}>Yes</button>
+              <button className="btn-no" onClick={onRerouteCancel}>No</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="va-grid">
 
         {/* LEFT — Session metadata */}
@@ -402,6 +575,14 @@ function slotLabel(which: UploadSlot): string {
   return "Vernier respiration slot";
 }
 
+function slotFriendlyName(which: UploadSlot): string {
+  if (which === "em") return "EmotiBit CSV";
+  if (which === "pol") return "Polar H10 CSV";
+  if (which === "mk") return "Event markers CSV";
+  if (which === "oa") return "Order & Affect CSV";
+  return "Vernier XLSX";
+}
+
 async function checkFileForSlot(
   file: File,
   which: UploadSlot,
@@ -497,6 +678,37 @@ function readCsvHeader(file: File): Promise<string> {
   });
 }
 
+/** Collapsible data preview showing header + first 5 rows. */
+function DataPreview({ preview }: { preview?: string[][] }) {
+  if (!preview || preview.length < 2) return null;
+  const [header, ...rows] = preview;
+  return (
+    <details className="data-preview" onClick={(e) => e.stopPropagation()}>
+      <summary>Preview ({Math.min(rows.length, 5)} rows)</summary>
+      <div className="data-preview-table">
+        <table>
+          <thead>
+            <tr>
+              {header.map((col, i) => (
+                <th key={i}>{col}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 5).map((row, ri) => (
+              <tr key={ri}>
+                {row.map((cell, ci) => (
+                  <td key={ci}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
 // Helper component: drag-drop + validation feedback.
 function DropSlot<T>({
   label, required, state, onFile, onClear, describeInfo,
@@ -528,6 +740,8 @@ function DropSlot<T>({
     input.click();
   };
 
+  const preview = ("status" in state && state.status !== "validating") ? (state as { preview?: string[][] }).preview : ("preview" in state ? (state as { preview?: string[][] }).preview : undefined);
+
   return (
     <div
       className={className}
@@ -538,6 +752,7 @@ function DropSlot<T>({
       onDragLeave={() => setDrag(false)}
       onDrop={(e) => {
         e.preventDefault();
+        e.stopPropagation();
         setDrag(false);
         const f = e.dataTransfer.files[0];
         if (f) onFile(f);
@@ -581,6 +796,7 @@ function DropSlot<T>({
           {"status" in state && state.status === "invalid" && (
             <div className="validation-detail error">✗ {state.error}</div>
           )}
+          <DataPreview preview={preview} />
         </>
       )}
     </div>
