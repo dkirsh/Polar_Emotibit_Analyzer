@@ -50,6 +50,8 @@ FORMULA (V2.2, respiratory channel added):
 
 from __future__ import annotations
 
+import numpy as np
+
 # Module-level flag for downstream consumers
 STRESS_SCORE_VALIDATED = False
 STRESS_SCORE_LABEL = "experimental composite (not psychometrically validated)"
@@ -61,6 +63,7 @@ def compute_stress_score(
     eda_mean_us: float,
     eda_phasic_index: float,
     rsa_amplitude: float | None = None,
+    baseline_hr_bpm: float | None = None,
 ) -> float:
     """Compute exploratory stress composite (v1).
 
@@ -71,10 +74,18 @@ def compute_stress_score(
     4-channel mode with redistributed weights.
     """
     # Normalize each component to [0, 1]
-    hr_component = max(0.0, min(1.0, (mean_hr_bpm - 60.0) / 60.0))
+    if baseline_hr_bpm is not None and baseline_hr_bpm > 0:
+        # Baseline-relative: deviation from individual baseline
+        hr_component = max(0.0, min(1.0, (mean_hr_bpm - baseline_hr_bpm) / 30.0))
+    else:
+        # Population-level fallback
+        hr_component = max(0.0, min(1.0, (mean_hr_bpm - 60.0) / 60.0))
     eda_component = max(0.0, min(1.0, eda_mean_us / 20.0))
     phasic_component = max(0.0, min(1.0, eda_phasic_index / 2.5))
-    hrv_protection = min(rmssd_ms, 80.0) / 80.0  # higher HRV = less stress
+    # Log-transform RMSSD (distributions are log-normal; Shaffer & Ginsberg 2017)
+    ln_rmssd = np.log(max(rmssd_ms, 1.0))  # avoid log(0)
+    # ln(RMSSD) range: ~2.3 (rmssd=10) to ~4.4 (rmssd=80)
+    hrv_protection = max(0.0, min(1.0, (ln_rmssd - 2.3) / (4.4 - 2.3)))
 
     if rsa_amplitude is not None:
         # 5-channel mode: weights informed by WESAD (Schmidt et al., 2018)
@@ -114,6 +125,9 @@ def compute_stress_score_v2(
     sd1_sd2_ratio: float | None = None,
     lf_nu: float | None = None,
     rsa_amplitude: float | None = None,
+    baseline_hr_bpm: float | None = None,
+    hf_nu: float | None = None,
+    temp_slope: float | None = None,
 ) -> tuple[float, dict[str, float | None]]:
     """Second-generation stress composite using Kubios-parity inputs.
 
@@ -129,12 +143,17 @@ def compute_stress_score_v2(
       LF_nu             — canonical normalised-units sympathovagal
                           marker (Task Force 1996) for between-subject
                           comparison.
+      HF_nu             — high-frequency normalised units; purer vagal
+                          index than LF_nu (Billman, 2013).
+      temp_slope        — skin temperature slope; negative slope indicates
+                          peripheral vasoconstriction (sympathetic).
 
     Missing-field handling: any of pnn50 / sd1_sd2_ratio / lf_nu /
-    rsa_amplitude can be None; the weight of each absent field
-    redistributes equally across the present fields. This is important
-    because LF_nu needs a ≥ 120 s session, SD1/SD2 ratio needs ≥ 4
-    beats, and RSA needs a PPG or respiratory channel.
+    rsa_amplitude / hf_nu / temp_slope can be None; the weight of each
+    absent field is proportionally redistributed across the present
+    fields. This is important because LF_nu needs a ≥ 120 s session,
+    SD1/SD2 ratio needs ≥ 4 beats, and RSA needs a PPG or respiratory
+    channel.
 
     Parameters
     ----------
@@ -165,16 +184,27 @@ def compute_stress_score_v2(
     rate variability. Circulation, 93(5), 1043-1065.
     """
     # Per-channel normalisations (all → [0, 1]) -----------------------
-    hr_n = max(0.0, min(1.0, (mean_hr_bpm - 60.0) / 60.0))
+    if baseline_hr_bpm is not None and baseline_hr_bpm > 0:
+        # Baseline-relative: deviation from individual baseline
+        hr_n = max(0.0, min(1.0, (mean_hr_bpm - baseline_hr_bpm) / 30.0))
+    else:
+        # Population-level fallback
+        hr_n = max(0.0, min(1.0, (mean_hr_bpm - 60.0) / 60.0))
     eda_n = max(0.0, min(1.0, eda_mean_us / 20.0))
     phasic_n = max(0.0, min(1.0, eda_phasic_index / 2.5))
 
     # Vagal composite: average of available vagal-tone proxies.
-    # RMSSD normalised to [0, 80]; pNN50 normalised to [0, 50] %.
+    # Log-transform RMSSD (distributions are log-normal; Shaffer & Ginsberg 2017)
     vagal_parts: list[float] = []
-    vagal_parts.append(min(rmssd_ms, 80.0) / 80.0)
+    ln_rmssd = np.log(max(rmssd_ms, 1.0))
+    vagal_parts.append(max(0.0, min(1.0, (ln_rmssd - 2.3) / (4.4 - 2.3))))
     if pnn50 is not None:
         vagal_parts.append(min(pnn50, 50.0) / 50.0)
+    if hf_nu is not None:
+        # HF_nu is a purer vagal index than LF_nu (Billman, 2013)
+        # Higher HF_nu = more vagal = less stress
+        hf_vagal = max(0.0, min(1.0, hf_nu / 100.0))
+        vagal_parts.append(hf_vagal)
     vagal_protection = sum(vagal_parts) / len(vagal_parts)
 
     # Sympathovagal balance: prefer LF_nu if available. LF_nu is already
@@ -196,36 +226,52 @@ def compute_stress_score_v2(
         rsa_n = min(rsa_amplitude, 30.0) / 30.0
         rsa_low = 1.0 - rsa_n
 
+    # Temperature: negative slope indicates vasoconstriction (sympathetic)
+    temp_stress = None
+    if temp_slope is not None:
+        # Map: -0.01 °C/s → 1.0 (strong vasoconstriction), 0 → 0.5, +0.01 → 0.0
+        temp_stress = max(0.0, min(1.0, 0.5 - temp_slope * 50.0))
+
     # Weights ---------------------------------------------------------
     # Intent:
-    #   HR                0.15
-    #   EDA (tonic)       0.20
-    #   EDA (phasic)      0.10
-    #   Vagal composite   0.15  (always present)
-    #   Sympathovagal     0.20  (LF_nu; redistributes if absent)
-    #   Rigidity          0.10  (SD1/SD2; redistributes if absent)
-    #   Respiratory       0.10  (RSA; redistributes if absent)
-    # Absent-channel weights divide equally across present channels.
+    #   HR                0.13
+    #   EDA (tonic)       0.18
+    #   EDA (phasic)      0.09
+    #   Vagal composite   0.14  (always present)
+    #   Sympathovagal     0.18  (LF_nu; redistributes if absent)
+    #   Rigidity          0.09  (SD1/SD2; redistributes if absent)
+    #   Respiratory       0.09  (RSA; redistributes if absent)
+    #   Temperature       0.10  (temp_slope; redistributes if absent)
+    # Absent-channel weights redistribute proportionally across
+    # present channels to preserve inter-channel ratios.
     base_weights = {
-        "hr": 0.15,
-        "eda": 0.20,
-        "phasic": 0.10,
-        "vagal": 0.15,
-        "sympathovagal": 0.20,
-        "rigidity": 0.10,
-        "rsa": 0.10,
+        "hr": 0.13,
+        "eda": 0.18,
+        "phasic": 0.09,
+        "vagal": 0.14,
+        "sympathovagal": 0.18,
+        "rigidity": 0.09,
+        "rsa": 0.09,
+        "temp": 0.10,
     }
     active = {"hr": True, "eda": True, "phasic": True, "vagal": True,
               "sympathovagal": sympathovagal is not None,
               "rigidity": rigidity is not None,
-              "rsa": rsa_low is not None}
+              "rsa": rsa_low is not None,
+              "temp": temp_stress is not None}
     missing_weight = sum(base_weights[k] for k, v in active.items() if not v)
-    n_active = sum(1 for v in active.values() if v)
-    redistrib = missing_weight / n_active if n_active > 0 else 0.0
-    effective_weights = {
-        k: (base_weights[k] + redistrib) if active[k] else 0.0
-        for k in base_weights
-    }
+    active_total = sum(base_weights[k] for k, v in active.items() if v)
+    if active_total > 0 and missing_weight > 0:
+        scale_factor = 1.0 / (1.0 - missing_weight)  # Scale to sum to 1.0
+        effective_weights = {
+            k: (base_weights[k] * scale_factor) if active[k] else 0.0
+            for k in base_weights
+        }
+    else:
+        effective_weights = {
+            k: base_weights[k] if active[k] else 0.0
+            for k in base_weights
+        }
 
     # Assemble ------------------------------------------------------
     channel_values = {
@@ -236,6 +282,7 @@ def compute_stress_score_v2(
         "sympathovagal": sympathovagal or 0.0,
         "rigidity": rigidity or 0.0,
         "rsa": rsa_low or 0.0,
+        "temp": temp_stress or 0.0,
     }
     score = sum(
         effective_weights[k] * channel_values[k] for k in base_weights if active[k]
@@ -251,6 +298,7 @@ def compute_stress_score_v2(
             contributions[k] = None
         contributions[f"{k}_weight"] = round(effective_weights[k], 4) if active[k] else None
         contributions[f"{k}_value"] = round(channel_values[k], 4) if active[k] else None
+    n_active = sum(1 for v in active.values() if v)
     contributions["_active_channels"] = float(n_active)
     contributions["_vagal_protection"] = round(vagal_protection, 4)
 

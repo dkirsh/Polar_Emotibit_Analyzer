@@ -54,10 +54,12 @@ class VernierParseResult:
 
 
 def parse_vernier_xlsx(file_bytes: bytes) -> VernierParseResult:
-    """Parse a Vernier respiration-belt .xlsx file.
+    """Parse a Vernier respiration-belt .xlsx or .csv file.
+
+    Auto-detects format: tries CSV first, then falls back to Excel.
 
     Args:
-        file_bytes: Raw bytes of the .xlsx file.
+        file_bytes: Raw bytes of the .xlsx or .csv file.
 
     Returns:
         VernierParseResult with uniform 20 Hz timeseries and metadata.
@@ -65,10 +67,20 @@ def parse_vernier_xlsx(file_bytes: bytes) -> VernierParseResult:
     Raises:
         ValueError: If required columns are missing or data is insufficient.
     """
+    # Try CSV first (faster, handles both .csv exports and pipe-delimited)
+    df = None
     try:
-        df = pd.read_excel(BytesIO(file_bytes), sheet_name=0, header=0)
-    except Exception as exc:
-        raise ValueError(f"Could not read Vernier Excel file: {exc}") from exc
+        text = file_bytes.decode("utf-8", errors="replace")
+        if "," in text[:2000]:  # likely CSV
+            df = pd.read_csv(BytesIO(file_bytes), header=0)
+    except Exception:
+        df = None
+
+    if df is None or len(df.columns) < 2:
+        try:
+            df = pd.read_excel(BytesIO(file_bytes), sheet_name=0, header=0)
+        except Exception as exc:
+            raise ValueError(f"Could not read Vernier file as CSV or Excel: {exc}") from exc
 
     # Strip whitespace from column names
     df.columns = [c.strip() for c in df.columns]
@@ -212,7 +224,7 @@ def parse_vernier_xlsx(file_bytes: bytes) -> VernierParseResult:
 # Mirrors the Estelita RespInPeace pipeline from rip.py.
 
 
-def _baseline_als(
+def baseline_als(
     signal: np.ndarray,
     lam: float = 1e10,
     p: float = 0.01,
@@ -233,7 +245,11 @@ def _baseline_als(
     return z
 
 
-def _peakdetect_simple(
+# Backward-compatible alias
+_baseline_als = baseline_als
+
+
+def peakdetect_simple(
     y: np.ndarray,
     lookahead: int = 1,
     delta: float = 1.0,
@@ -288,6 +304,10 @@ def _peakdetect_simple(
                 min_peaks.pop(0)
 
     return max_peaks, min_peaks
+
+
+# Backward-compatible alias
+_peakdetect_simple = peakdetect_simple
 
 
 def compute_respiratory_features(

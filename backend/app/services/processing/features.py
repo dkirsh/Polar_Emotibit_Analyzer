@@ -88,6 +88,14 @@ def _get_rr_intervals(df: pd.DataFrame) -> tuple[np.ndarray, str]:
             # computed on a length-stable series.
             if len(rr) >= 11:  # minimum for the running-median window
                 rr, _ectopic_mask = lipponen_tarvainen_correction(rr)
+                ectopic_rate = float(np.sum(_ectopic_mask)) / len(_ectopic_mask)
+                if ectopic_rate > 0.05:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        'High ectopic rate: %.1f%% of beats flagged (%d/%d). '
+                        'HRV metrics may be unreliable.',
+                        ectopic_rate * 100, int(np.sum(_ectopic_mask)), len(_ectopic_mask)
+                    )
             else:
                 rr = _filter_ectopic(rr)  # fall back for short sessions
             if len(rr) >= 3:
@@ -658,13 +666,73 @@ def compute_hrv_frequency_features(
 # ---------------------------------------------------------------------------
 
 def compute_eda_features(df: pd.DataFrame) -> tuple[float, float]:
-    """Tonic (mean SCL) and phasic (mean absolute first difference) EDA."""
-    eda = df["eda_us"].to_numpy(dtype=float)
-    if eda.size < 3:
-        return float(np.mean(eda)) if eda.size else 0.0, 0.0
-    tonic = float(np.mean(eda))
-    phasic = float(np.mean(np.abs(np.diff(eda))))
-    return tonic, phasic
+    """Tonic (mean SCL) and phasic (SCR-based) EDA features.
+    
+    Uses a 4th-order Butterworth highpass filter at 0.05 Hz to separate
+    tonic (slow drift) from phasic (fast SCR) components. The phasic
+    index is the mean amplitude of detected SCR peaks, normalized by
+    the tonic level.
+    
+    Reference:
+        Boucsein, W. (2012). Electrodermal Activity (2nd ed.). Springer.
+        Benedek, M., & Kaernbach, C. (2010). Psychophysiology, 47(4), 647-658.
+    """
+    if 'eda_us' not in df.columns:
+        return 0.0, 0.0
+    eda = df['eda_us'].to_numpy(dtype=float)
+    if eda.size < 30:
+        # Too short for filter; fall back to simple stats
+        return (float(np.mean(eda)) if eda.size else 0.0, 0.0)
+    
+    # Remove NaN
+    eda = eda[np.isfinite(eda)]
+    if eda.size < 30:
+        return float(np.mean(eda)), 0.0
+    
+    tonic_mean = float(np.mean(eda))
+    
+    # Determine sampling rate from timestamps if available
+    fs = 15.0  # EmotiBit default
+    if 'timestamp_ms' in df.columns and len(df) > 1:
+        dt = np.diff(df['timestamp_ms'].to_numpy(dtype=float))
+        dt = dt[dt > 0]
+        if len(dt) > 0:
+            fs = 1000.0 / np.median(dt)
+    
+    # Highpass filter at 0.05 Hz to extract phasic component
+    nyq = 0.5 * fs
+    cutoff = 0.05 / nyq
+    if cutoff >= 1.0:
+        # Sampling rate too low for this cutoff
+        return tonic_mean, float(np.mean(np.abs(np.diff(eda))))
+    
+    try:
+        b, a = butter(4, cutoff, btype='high')
+        phasic = filtfilt(b, a, eda)
+        
+        # Detect SCR peaks in the phasic component
+        # Minimum SCR duration ~1s, minimum amplitude 0.01 µS
+        min_distance = max(int(fs * 1.0), 1)
+        scr_peaks, properties = find_peaks(
+            phasic, 
+            distance=min_distance,
+            height=0.01,
+            prominence=0.01,
+        )
+        
+        if len(scr_peaks) > 0:
+            # Phasic index: SCR rate (peaks per minute) * mean SCR amplitude
+            duration_min = len(eda) / fs / 60.0
+            scr_rate = len(scr_peaks) / max(duration_min, 0.01)
+            scr_amplitudes = phasic[scr_peaks]
+            phasic_index = float(scr_rate * np.mean(scr_amplitudes))
+        else:
+            phasic_index = 0.0
+    except Exception:
+        # Fallback to simple first-difference if filter fails
+        phasic_index = float(np.mean(np.abs(np.diff(eda))))
+    
+    return tonic_mean, phasic_index
 
 
 # ---------------------------------------------------------------------------
@@ -730,11 +798,11 @@ def _compute_edr_detailed_from_rr(
 
         # Bandpass filter for respiration band (0.15 to 0.4 Hz -> 9 to 24 breaths/min)
         nyq = 0.5 * resample_hz
-        b, a = butter(4, [0.15 / nyq, 0.4 / nyq], btype='band')
+        b, a = butter(4, [0.10 / nyq, 0.50 / nyq], btype='band')
         edr_signal = filtfilt(b, a, rr_uniform)
 
         # Find peaks and troughs to estimate coarse breath timing.
-        min_distance = int(resample_hz * (60.0 / 30.0))  # Max 30 breaths/min
+        min_distance = int(resample_hz * (60.0 / 40.0))  # Max 40 breaths/min
         peaks, _ = find_peaks(edr_signal, distance=min_distance)
         troughs, _ = find_peaks(-edr_signal, distance=min_distance)
 
