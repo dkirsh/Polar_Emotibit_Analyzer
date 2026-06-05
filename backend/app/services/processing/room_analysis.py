@@ -20,6 +20,11 @@ from app.services.processing.features import (
 )
 from app.services.processing.stress import compute_stress_score_v2
 from app.services.processing.extended_analytics import decompose_stress
+from app.services.processing.normalization import (
+    compute_baseline_reference,
+    compute_eda_phasic_index,
+    normalize_room_rows,
+)
 
 
 def compute_room_stats(
@@ -71,6 +76,8 @@ def compute_room_stats(
                     "valence": room.get("valence"),
                     "arousal": room.get("arousal"),
                 }
+
+    baseline_ref = compute_baseline_reference(cleaned_df, markers)
 
     results: list[dict[str, Any]] = []
 
@@ -130,9 +137,12 @@ def compute_room_stats(
             eda = window["eda_us"].dropna()
             stats["mean_eda"] = round(float(eda.mean()), 2) if len(eda) > 0 else None
             stats["sd_eda"] = round(float(eda.std(ddof=1)), 2) if len(eda) > 1 else 0.0
+            phasic = compute_eda_phasic_index(eda)
+            stats["eda_phasic_index"] = round(float(phasic), 4) if phasic is not None else None
         else:
             stats["mean_eda"] = None
             stats["sd_eda"] = None
+            stats["eda_phasic_index"] = None
 
         # HRV features (RMSSD)
         try:
@@ -228,7 +238,7 @@ def compute_room_stats(
 
         results.append(stats)
 
-    return results
+    return normalize_room_rows(results, baseline_ref)
 
 
 def _round_optional(value: Any, digits: int) -> float | None:
@@ -337,6 +347,8 @@ def export_room_comparison_csv(sessions: list[dict[str, Any]]) -> bytes:
         "rmssd", "stress_v2", "stress_v1",
         "valence", "arousal",
         "duration_s", "sample_count",
+        "mean_hr_delta_bpm", "mean_hr_pct_change",
+        "mean_eda_delta_us", "eda_phasic_delta", "ln_rmssd_delta",
     ]
 
     buf = io.StringIO()
@@ -364,6 +376,11 @@ def export_room_comparison_csv(sessions: list[dict[str, Any]]) -> bytes:
                 "arousal": _fmt(rs.get("arousal"), 2),
                 "duration_s": _fmt(rs.get("duration_s"), 1),
                 "sample_count": rs.get("sample_count", ""),
+                "mean_hr_delta_bpm": _fmt(rs.get("mean_hr_delta_bpm"), 1),
+                "mean_hr_pct_change": _fmt(rs.get("mean_hr_pct_change"), 2),
+                "mean_eda_delta_us": _fmt(rs.get("mean_eda_delta_us"), 3),
+                "eda_phasic_delta": _fmt(rs.get("eda_phasic_delta"), 4),
+                "ln_rmssd_delta": _fmt(rs.get("ln_rmssd_delta"), 4),
             })
 
     return buf.getvalue().encode("utf-8")

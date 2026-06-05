@@ -51,6 +51,7 @@ from app.services.processing.drift import (
 from app.services.processing.features import (
     compute_eda_features,
     compute_hrv_features,
+    compute_hrv_features_with_accel,
     compute_hrv_frequency_features,
     compute_poincare_features,
     compute_time_domain_features,
@@ -168,12 +169,36 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
     # 35.28 ms (29.8 % error). EDA features stay on the synced DataFrame
     # because they need cross-sensor time alignment.
     #
-    # Tradeoff: HRV now skips movement-artifact filtering (which is
-    # applied in clean_signals via EmotiBit accel). An artifact-aware
-    # HRV filter that drops RR beats falling inside accel-flagged
-    # movement epochs is a future enhancement. The current state is
-    # a strict improvement over the decimation bug.
-    rmssd_ms, sdnn_ms, mean_hr_bpm, rr_source = compute_hrv_features(corrected_polar)
+    # [2026-06-05]: Movement-artifact-aware HRV now active. When the synced
+    # DataFrame has accelerometer columns (acc_x/y/z from EmotiBit), we
+    # merge them onto the corrected Polar DataFrame by timestamp so that
+    # RR intervals falling inside high-motion epochs (>1.5 g) are excluded
+    # before HRV computation. This resolves the tradeoff noted in the
+    # original F12 fix.
+    #
+    # Build a Polar+accel DataFrame for movement-aware HRV.
+    _hrv_df = corrected_polar.copy()
+    _accel_cols = ["acc_x", "acc_y", "acc_z"]
+    if all(c in synced.columns for c in _accel_cols) and "timestamp_ms" in synced.columns:
+        # Carry accelerometer from the synced frame into the Polar frame
+        # via nearest-timestamp join so we can cross-check movement.
+        _accel = synced[["timestamp_ms"] + _accel_cols].dropna(subset=_accel_cols).copy()
+        if len(_accel) > 0:
+            _accel = _accel.sort_values("timestamp_ms")
+            _hrv_df = _hrv_df.sort_values("timestamp_ms")
+            _hrv_df = pd.merge_asof(
+                _hrv_df, _accel,
+                on="timestamp_ms", direction="nearest", tolerance=2000,
+            )
+
+    _hrv_accel = compute_hrv_features_with_accel(_hrv_df)
+    rmssd_ms = float(_hrv_accel["rmssd_ms"])
+    sdnn_ms = float(_hrv_accel["sdnn_ms"])
+    mean_hr_bpm = float(_hrv_accel["mean_hr_bpm"])
+    rr_source = str(_hrv_accel["rr_source"])
+    _rr_excluded_movement = int(_hrv_accel.get("rr_excluded_movement", 0))
+    _rr_total = int(_hrv_accel.get("rr_total", 0))
+    _movement_artifact_ratio_hrv = float(_hrv_accel.get("movement_artifact_ratio", 0.0))
     # 2026-04-21 Kubios-parity: extended time-domain and Poincaré descriptors.
     time_domain_ext = compute_time_domain_features(corrected_polar)
     poincare = compute_poincare_features(corrected_polar)
@@ -208,6 +233,11 @@ def run_analysis(emotibit_df: pd.DataFrame, polar_df: pd.DataFrame) -> AnalysisR
         quality_flags.append("RMSSD unusually low")
     if movement_artifact_ratio > 0.2:
         quality_flags.append("High motion artifact ratio (>20% of synchronized samples)")
+    if _rr_excluded_movement > 0:
+        quality_flags.append(
+            f"Movement-artifact-aware HRV: {_rr_excluded_movement}/{_rr_total} RR intervals "
+            f"excluded ({_movement_artifact_ratio_hrv:.1%} of beats in high-motion epochs >1.5 g)"
+        )
 
     if rr_source == "derived_from_bpm":
         quality_flags.append(

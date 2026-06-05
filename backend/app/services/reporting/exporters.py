@@ -142,6 +142,11 @@ def export_interval_means_to_csv(session_record: dict[str, Any]) -> bytes:
     windowed = extended.get("windowed") or {}
     timeseries = extended.get("cleaned_timeseries") or []
     origin_ms = _session_time_origin_ms(timeseries)
+    room_stats_by_key = {
+        str(row.get("room_key", "")).lower(): row
+        for row in (session_record.get("room_stats") or [])
+        if isinstance(row, dict)
+    }
 
     headers = [
         "Key",
@@ -168,6 +173,11 @@ def export_interval_means_to_csv(session_record: dict[str, Any]) -> bytes:
         "Sample Count",
         "Onset ms",
         "Offset ms",
+        "Ln RMSSD Delta",
+        "HR Delta",
+        "HR % Change",
+        "EDA Tonic Delta",
+        "EDA Phasic Delta",
     ]
 
     buf = io.StringIO()
@@ -266,6 +276,13 @@ def export_interval_means_to_csv(session_record: dict[str, Any]) -> bytes:
             v2_hr_c = v2_eda_c = v2_phas_c = v2_vag_c = v2_sym_c = v2_rig_c = v2_rsa_c = arousal = None
             driver = "mixed"
 
+        room_row = room_stats_by_key.get(str(interval.get("key", "")).lower(), {})
+        ln_rmssd_delta = room_row.get("ln_rmssd_delta")
+        hr_delta = room_row.get("mean_hr_delta_bpm")
+        hr_pct_change = room_row.get("mean_hr_pct_change")
+        eda_tonic_delta = room_row.get("mean_eda_delta_us")
+        eda_phasic_delta = room_row.get("eda_phasic_delta")
+
         writer.writerow(
             [
                 interval["letter"],
@@ -292,6 +309,11 @@ def export_interval_means_to_csv(session_record: dict[str, Any]) -> bytes:
                 len(points),
                 int(onset_ms),
                 int(offset_ms),
+                _fmt(ln_rmssd_delta, 4),
+                _fmt(hr_delta, 1),
+                _fmt(hr_pct_change, 2),
+                _fmt(eda_tonic_delta, 3),
+                _fmt(eda_phasic_delta, 4),
             ]
         )
 

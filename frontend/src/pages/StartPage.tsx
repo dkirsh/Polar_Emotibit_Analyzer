@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import JSZip from "jszip";
 import { useNavigate } from "react-router-dom";
 import {
   analyze,
@@ -96,6 +97,20 @@ function parseCsvPreview(file: File): Promise<string[][] | undefined> {
     // Read first 16KB — enough for 6 lines of any reasonable CSV
     reader.readAsText(file.slice(0, 16384));
   });
+}
+
+/**
+ * Bundle multiple files into a single ZIP using JSZip.
+ * Returns a File object named "bundled_<N>_files.zip".
+ */
+async function bundleFilesAsZip(files: File[]): Promise<File> {
+  const zip = new JSZip();
+  for (const f of files) {
+    const buf = await f.arrayBuffer();
+    zip.file(f.name, buf);
+  }
+  const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+  return new File([blob], `bundled_${files.length}_files.zip`, { type: "application/zip" });
 }
 
 /** Detect file type using header-sniffing logic. Returns the best-guess slot or null. */
@@ -207,6 +222,27 @@ export const StartPage: React.FC = () => {
 
   const hasValidEmotibit = emotibit.file !== null && "status" in emotibit && emotibit.status === "valid";
   const hasValidPolar = polar.file !== null && "status" in polar && polar.status === "valid";
+
+  /**
+   * Accept one or more files for a slot. If multiple files are provided,
+   * they are bundled into a single ZIP client-side before validation.
+   */
+  const onDropFiles = useCallback(
+    async (which: UploadSlot, files: File[]) => {
+      if (files.length === 0) return;
+      let file: File;
+      if (files.length === 1) {
+        file = files[0];
+      } else {
+        // Bundle multiple files into a ZIP
+        showToast(`Bundling ${files.length} files into ZIP…`, "success");
+        file = await bundleFilesAsZip(files);
+      }
+      onDropFile(which, file);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [/* forward to onDropFile */],
+  );
 
   const onDropFile = useCallback(
     async (
@@ -384,9 +420,14 @@ export const StartPage: React.FC = () => {
         e.preventDefault();
         dragCounter.current = 0;
         setPageDrag(false);
-        // Only handle if not dropped on a specific DropSlot (which stops propagation)
-        const f = e.dataTransfer.files[0];
-        if (f) onPageDrop(f);
+        // Handle single or multiple files dropped on the page
+        const fileList = e.dataTransfer.files;
+        if (fileList.length === 1) {
+          onPageDrop(fileList[0]);
+        } else if (fileList.length > 1) {
+          // Multiple files dropped on page — try to auto-detect and route
+          onPageDrop(fileList[0]); // Route first file; user can multi-drop on slots
+        }
       }}
     >
       {/* Toast notification */}
@@ -456,6 +497,7 @@ export const StartPage: React.FC = () => {
             required={false}
             state={emotibit}
             onFile={(f) => onDropFile("em", f)}
+            onFiles={(files) => onDropFiles("em", files)}
             onClear={() => setEmotibit({ file: null })}
             describeInfo={(info) =>
               `${info.n_rows} rows, ${info.timestamp_range_ms.span_s}s · ${info.has_accelerometer ? "accelerometer present" : "no accelerometer"}${info.has_respiration ? " · resp_bpm present" : ""}`}
@@ -465,6 +507,7 @@ export const StartPage: React.FC = () => {
             required={false}
             state={polar}
             onFile={(f) => onDropFile("pol", f)}
+            onFiles={(files) => onDropFiles("pol", files)}
             onClear={() => setPolar({ file: null })}
             describeInfo={(info) =>
               `${info.n_rows} rows, ${info.timestamp_range_ms.span_s}s · ${
@@ -480,6 +523,7 @@ export const StartPage: React.FC = () => {
             required={false}
             state={markers}
             onFile={(f) => onDropFile("mk", f)}
+            onFiles={(files) => onDropFiles("mk", files)}
             onClear={() => setMarkers({ file: null })}
             describeInfo={(info) =>
               `${info.n_events ?? info.n_rows} markers · codes: ${(info.event_codes ?? []).join(", ") || "none"}`
@@ -490,6 +534,7 @@ export const StartPage: React.FC = () => {
             required={false}
             state={orderAffect}
             onFile={(f) => onDropFile("oa", f)}
+            onFiles={(files) => onDropFiles("oa", files)}
             onClear={() => setOrderAffect({ file: null })}
             describeInfo={(info) =>
               `${info.n_rooms ?? 0} rooms · subject ${info.subject_id_detected ?? "?"} · types: ${(info.room_types ?? []).join(", ") || "none"}`
@@ -500,6 +545,7 @@ export const StartPage: React.FC = () => {
             required={false}
             state={vernier}
             onFile={(f) => onDropFile("vn", f)}
+            onFiles={(files) => onDropFiles("vn", files)}
             onClear={() => setVernier({ file: null })}
             describeInfo={(info) =>
               `${info.n_rows} samples · ${info.duration_min?.toFixed(1) ?? "?"}min · ${info.sample_rate_hz}Hz resampled${info.vendor_rr_median ? ` · vendor RR ${info.vendor_rr_median} bpm` : ""}`
@@ -711,12 +757,13 @@ function DataPreview({ preview }: { preview?: string[][] }) {
 
 // Helper component: drag-drop + validation feedback.
 function DropSlot<T>({
-  label, required, state, onFile, onClear, describeInfo,
+  label, required, state, onFile, onFiles, onClear, describeInfo,
 }: {
   label: string;
   required: boolean;
   state: FileSlotState<T>;
   onFile: (f: File) => void;
+  onFiles?: (files: File[]) => void;
   onClear: () => void;
   describeInfo: (info: T) => string;
 }) {
@@ -735,8 +782,17 @@ function DropSlot<T>({
   const openPicker = () => {
     const input = document.createElement("input");
     input.type = "file";
+    input.multiple = true;
     input.accept = ".csv,.zip,.xlsx,text/csv,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    input.onchange = () => { if (input.files?.[0]) onFile(input.files[0]); };
+    input.onchange = () => {
+      if (!input.files || input.files.length === 0) return;
+      if (input.files.length === 1) {
+        onFile(input.files[0]);
+      } else {
+        const arr = Array.from(input.files);
+        onFiles ? onFiles(arr) : onFile(arr[0]);
+      }
+    };
     input.click();
   };
 
@@ -754,8 +810,13 @@ function DropSlot<T>({
         e.preventDefault();
         e.stopPropagation();
         setDrag(false);
-        const f = e.dataTransfer.files[0];
-        if (f) onFile(f);
+        const fileList = e.dataTransfer.files;
+        if (fileList.length === 1) {
+          onFile(fileList[0]);
+        } else if (fileList.length > 1) {
+          const arr = Array.from(fileList);
+          onFiles ? onFiles(arr) : onFile(arr[0]);
+        }
       }}
       onClick={openPicker}
       onKeyDown={(e) => {
@@ -783,7 +844,7 @@ function DropSlot<T>({
         )}
       </div>
       {state.file === null ? (
-        <p style={{ color: "#888" }}>Drag CSV or ZIP here, or click to browse</p>
+        <p style={{ color: "#888" }}>Drag CSV(s) or ZIP here, or click to browse (multi-select supported)</p>
       ) : (
         <>
           <div className="filename">{state.file.name}</div>

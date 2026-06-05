@@ -76,6 +76,19 @@ def parse_vernier_xlsx(file_bytes: bytes) -> VernierParseResult:
     # Validate required columns
     present = set(df.columns)
     missing = REQUIRED_VERNIER_COLUMNS - present
+
+    # Auto-derive timestamp_unix from datetime timestamp column if absent
+    if "timestamp_unix" not in present and "timestamp" in present:
+        try:
+            dt_series = pd.to_datetime(df["timestamp"], errors="coerce")
+            df["timestamp_unix"] = dt_series.apply(
+                lambda x: x.timestamp() if pd.notna(x) else float("nan")
+            )
+            present.add("timestamp_unix")
+            missing.discard("timestamp_unix")
+        except Exception:
+            pass  # will fail on missing-column check below
+
     if missing:
         raise ValueError(
             f"Vernier file missing required columns: {sorted(missing)}. "
