@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.routes import analysis, validate
+from app.api.v1.routes import analysis, validate, workflow
 from app.schemas.analysis import HealthResponse
 
 
@@ -58,3 +58,4 @@ def health() -> HealthResponse:
 
 app.include_router(analysis.router, prefix="/api/v1")
 app.include_router(validate.router, prefix="/api/v1")
+app.include_router(workflow.router, prefix="/api/v1")

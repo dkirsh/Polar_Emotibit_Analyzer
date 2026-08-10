@@ -21,6 +21,7 @@ from app.schemas.analysis import (
     SessionDetail,
     SessionSummary,
     MarkerUpdateRequest,
+    RespiratoryConditionsRequest,
 )
 from app.services.ingestion.parsers import parse_emotibit_csv, parse_polar_csv
 from app.services.processing.clean import clean_signals
@@ -516,6 +517,7 @@ async def analyze(
 
     # Parse Vernier respiration belt file if provided
     vernier_result: Optional[dict[str, Any]] = None
+    respiratory_patterns_result: Optional[dict[str, Any]] = None
     if vernier_file is not None:
         try:
             from app.services.ingestion.vernier_parser import parse_and_analyze_vernier
@@ -528,10 +530,55 @@ async def analyze(
                 "event_markers": vern_parsed.event_markers,
                 "metadata": vern_parsed.metadata,
                 "respiratory_features": vern_parsed.respiratory_features,
+                # Carry raw timeseries for pattern analysis (not serialized to JSON)
+                "_timeseries": vern_parsed.timeseries,
             }
+
+            # Run respiratory stress pattern analysis
+            try:
+                from app.services.processing.respiratory_patterns import (
+                    analyze_respiratory_patterns,
+                )
+                # Build condition map from order_affect if available
+                _cond_map: Optional[dict[str, list[str]]] = None
+                if order_affect_data:
+                    _cond_map = {}
+                    oa_rooms = order_affect_data.get("rooms", {})
+                    for rkey, rval in oa_rooms.items():
+                        cond = rval.get("condition", rval.get("room_type", ""))
+                        if cond:
+                            _cond_map.setdefault(cond, []).append(rkey)
+
+                respiratory_patterns_result = analyze_respiratory_patterns(
+                    vernier_result,
+                    markers=vern_parsed.event_markers,
+                    condition_map=_cond_map,
+                )
+                log.info(
+                    "Respiratory pattern analysis: %d patterns detected, %d figures",
+                    len(respiratory_patterns_result.get("patterns_detected", [])),
+                    respiratory_patterns_result.get("n_figures", 0),
+                )
+            except Exception as pat_exc:  # noqa: BLE001
+                log.warning("Respiratory pattern analysis failed: %s", pat_exc)
+                respiratory_patterns_result = {
+                    "error": f"Pattern analysis failed: {pat_exc}"
+                }
+
+            # Remove non-serializable timeseries from stored result
+            vernier_result.pop("_timeseries", None)
+
         except Exception as exc:  # noqa: BLE001
             log.warning("Vernier file processing failed: %s", exc)
             vernier_result = {"error": f"Vernier file could not be parsed: {exc}"}
+
+    # Separate the recompute inputs (raw source of truth, used to re-run pattern
+    # detection under a user-chosen condition grouping) from the client-facing
+    # derived result. The raw block is persisted server-side but is not declared
+    # on SessionDetail, so it is dropped from API responses (it can be large).
+    resp_recompute = None
+    if isinstance(respiratory_patterns_result, dict):
+        resp_recompute = respiratory_patterns_result.pop("_recompute", None)
 
     # Persist in the in-process store keyed by session_id (latest-wins).
     analysis_id = str(uuid.uuid4())
@@ -551,6 +598,9 @@ async def analyze(
         "room_stats": room_stats,
         "condition_aggregate": condition_aggregate,
         "vernier": vernier_result,
+        "respiratory_patterns": respiratory_patterns_result,
+        "respiratory_conditions": None,
+        "_resp_recompute": resp_recompute,
     }
     _SESSION_STORE[session_id] = stored
     _persist_store()
@@ -713,12 +763,65 @@ async def analyze_single(
         )
 
     try:
-        csv_text = (await file.read()).decode("utf-8", errors="replace")
+        raw = await file.read()
+        if _is_zip(raw):
+            # ZIP file: extract and parse each CSV inside, concatenate
+            import io as _io, zipfile as _zf
+            from app.services.ingestion.zip_ingestion import extract_and_classify_zip
+            from app.services.ingestion.parsers import parse_native_emotibit
+
+            frames = []
+            with _zf.ZipFile(_io.BytesIO(raw)) as zf:
+                if mode == "emotibit":
+                    # Try structured extraction first
+                    contents = extract_and_classify_zip(raw)
+                    if contents.emotibit_channels:
+                        frames.append(parse_native_emotibit(contents.emotibit_channels))
+                    elif contents.emotibit_formatted:
+                        frames.append(parse_emotibit_csv(contents.emotibit_formatted))
+                    else:
+                        for info in zf.infolist():
+                            if info.is_dir():
+                                continue
+                            name = info.filename.split("/")[-1]
+                            if not name.lower().endswith(".csv") or name.startswith("."):
+                                continue
+                            try:
+                                text = zf.read(info.filename).decode("utf-8", errors="replace")
+                                frames.append(parse_emotibit_csv(text))
+                            except Exception:
+                                continue
+                else:  # polar
+                    contents = extract_and_classify_zip(raw)
+                    if contents.polar_text:
+                        frames.append(parse_polar_csv(contents.polar_text))
+                    else:
+                        for info in zf.infolist():
+                            if info.is_dir():
+                                continue
+                            name = info.filename.split("/")[-1]
+                            if not name.lower().endswith(".csv") or name.startswith("."):
+                                continue
+                            try:
+                                text = zf.read(info.filename).decode("utf-8", errors="replace")
+                                frames.append(parse_polar_csv(text))
+                            except Exception:
+                                continue
+
+            if not frames:
+                raise ValueError(f"ZIP does not contain recognizable {mode} data.")
+            df = pd.concat(frames, ignore_index=True).sort_values("timestamp_ms")
+            log.info("Single-file ZIP: extracted %d CSV(s), %d total rows", len(frames), len(df))
+        else:
+            csv_text = raw.decode("utf-8", errors="replace")
+            if mode == "polar":
+                df = parse_polar_csv(csv_text)
+            else:
+                df = parse_emotibit_csv(csv_text)
+
         if mode == "polar":
-            df = parse_polar_csv(csv_text)
             result, extended = _build_polar_only_result(df)
         else:
-            df = parse_emotibit_csv(csv_text)
             result, extended = _build_emotibit_only_result(df)
     except ValueError as exc:
         raise HTTPException(
@@ -957,5 +1060,52 @@ def update_session_markers(session_id: str, request: MarkerUpdateRequest) -> Ses
                 for score in windowed["stress_v2"]
             ]
 
+    _persist_store()
+    return SessionDetail(**record)
+
+
+@router.post("/sessions/{session_id}/respiratory/conditions", response_model=SessionDetail)
+def recompute_respiratory_conditions(
+    session_id: str, request: RespiratoryConditionsRequest
+) -> SessionDetail:
+    """Recompute respiratory stress patterns under a researcher-chosen grouping.
+
+    The researcher assigns markers to named conditions and tags each as the
+    stress arm, the calm/control arm, or comparison-only. Pattern detection and
+    figures are re-run with that dichotomy, the comparison table is rebuilt, and
+    the chosen grouping is persisted with the session so it reloads and can flow
+    into exports. The raw recompute inputs (the source of truth) are left
+    untouched; only the derived `respiratory_patterns` field is rewritten.
+    """
+    _migrate_stored_sessions()
+    if session_id not in _SESSION_STORE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No session found for session_id={session_id!r}",
+        )
+    record = _SESSION_STORE[session_id]
+
+    recompute_payload = record.get("_resp_recompute")
+    if not recompute_payload:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "This session has no respiration-belt recompute data. Re-run the "
+                "analysis with a Vernier belt file to enable custom conditions."
+            ),
+        )
+
+    conditions = [c.model_dump() if hasattr(c, "model_dump") else c.dict()
+                  for c in request.conditions]
+
+    from app.services.processing.respiratory_patterns import (
+        recompute_respiratory_patterns,
+    )
+    new_result = recompute_respiratory_patterns(recompute_payload, conditions)
+
+    # One ledger per fact: the raw _resp_recompute block is the source of truth;
+    # respiratory_patterns is derived and is the only field we overwrite here.
+    record["respiratory_patterns"] = new_result
+    record["respiratory_conditions"] = conditions
     _persist_store()
     return SessionDetail(**record)

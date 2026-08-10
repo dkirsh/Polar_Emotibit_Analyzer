@@ -312,7 +312,92 @@ export type StoredSession = {
     rows: Array<Record<string, unknown>>;
     skipped: Array<{ subject_id: string; reason: string }>;
   } | null;
+  // Direct Vernier respiration-belt results, when a belt file was uploaded.
+  // Computed by /analyze and carried through SessionDetail; null when no belt
+  // was recorded or the file could not be parsed (then `error` is set).
+  vernier?: {
+    n_samples?: number;
+    duration_s?: number;
+    sample_rate_hz?: number;
+    respiratory_features?: {
+      resp_rate_bpm?: number | null;
+      mean_cycle_dur_s?: number | null;
+      ie_ratio_mean?: number | null;
+      n_breaths?: number | null;
+    } | null;
+    error?: string;
+  } | null;
+  respiratory_patterns?: {
+    patterns_detected?: string[];
+    pattern_counts?: Record<string, number>;
+    pattern_details?: Record<string, {
+      label: string;
+      description?: string;
+      count: number;
+      calm_count: number;
+      found: boolean;
+    }>;
+    // pattern name → base64-encoded PNG (no data: prefix), e.g. "stress_sigh", "overview".
+    figures?: Record<string, string>;
+    n_figures?: number;
+    condition_comparison?: {
+      conditions?: Record<string, {
+        n_breaths: number;
+        resp_rate_mean: number | null;
+        resp_rate_sd: number | null;
+        ie_ratio_mean: number | null;
+        ie_ratio_sd: number | null;
+        amplitude_mean: number | null;
+        amplitude_sd: number | null;
+        cv_mean: number | null;
+        duty_cycle_mean: number | null;
+      }>;
+      n_conditions?: number;
+    };
+    total_breaths?: number;
+    summary?: string;
+    // Stage-2 statistics: pairwise condition contrasts with effect sizes + CIs.
+    contrasts?: Array<{
+      condition_a: string;
+      condition_b: string;
+      metric: string;
+      metric_label: string;
+      n_a: number;
+      n_b: number;
+      mean_a: number | null;
+      mean_b: number | null;
+      diff: number | null;
+      cohens_d: number | null;
+      ci95_low: number | null;
+      ci95_high: number | null;
+      underpowered: boolean;
+      underpowered_reason?: string | null;
+    }>;
+    contrasts_note?: string;
+    // Figures that could not be drawn, with reasons (viz fail-soft contract).
+    figures_skipped?: Record<string, string>;
+    error?: string;
+  } | null;
+  // The researcher's saved condition grouping, if any has been applied.
+  respiratory_conditions?: Array<{ name: string; markers: string[]; role: string }> | null;
 };
+
+/** Recompute respiratory patterns under a researcher-chosen condition grouping. */
+export async function recomputeRespiratoryConditions(
+  sessionId: string,
+  conditions: Array<{ name: string; markers: string[]; role: string }>,
+): Promise<StoredSession> {
+  const r = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/respiratory/conditions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conditions }),
+  });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({}));
+    throw new Error(detail.detail || `Recompute failed (${r.status})`);
+  }
+  return (await r.json()) as StoredSession;
+}
 
 export type SummaryMetric = {
   n: number;

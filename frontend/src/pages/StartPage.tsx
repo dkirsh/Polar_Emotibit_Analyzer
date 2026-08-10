@@ -223,27 +223,6 @@ export const StartPage: React.FC = () => {
   const hasValidEmotibit = emotibit.file !== null && "status" in emotibit && emotibit.status === "valid";
   const hasValidPolar = polar.file !== null && "status" in polar && polar.status === "valid";
 
-  /**
-   * Accept one or more files for a slot. If multiple files are provided,
-   * they are bundled into a single ZIP client-side before validation.
-   */
-  const onDropFiles = useCallback(
-    async (which: UploadSlot, files: File[]) => {
-      if (files.length === 0) return;
-      let file: File;
-      if (files.length === 1) {
-        file = files[0];
-      } else {
-        // Bundle multiple files into a ZIP
-        showToast(`Bundling ${files.length} files into ZIP…`, "success");
-        file = await bundleFilesAsZip(files);
-      }
-      onDropFile(which, file);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [/* forward to onDropFile */],
-  );
-
   const onDropFile = useCallback(
     async (
       which: UploadSlot,
@@ -308,17 +287,42 @@ export const StartPage: React.FC = () => {
     [emotibit.file, markers.file, polar.file, orderAffect.file, vernier.file],
   );
 
-  /** Handle a file dropped on the page (not on a specific slot) — auto-detect and route. */
-  const onPageDrop = useCallback(
-    async (file: File) => {
-      const detectedSlot = await detectFileType(file);
-      if (detectedSlot) {
-        showToast(`✓ Detected as ${slotFriendlyName(detectedSlot)} — routed to ${slotLabel(detectedSlot)}`, "success");
-        onDropFile(detectedSlot, file);
-      } else {
-        showToast(`Could not auto-detect file type for ${file.name}. Drop it on a specific slot.`, "warn");
+  /**
+   * Accept one or more files for a slot. Each file is individually
+   * auto-detected and routed to the correct slot. Only files that
+   * all match the target slot are bundled into a ZIP; mixed types
+   * are routed individually.
+   */
+  const onDropFiles = useCallback(
+    async (which: UploadSlot, files: File[]) => {
+      if (files.length === 0) return;
+      if (files.length === 1) {
+        onDropFile(which, files[0]);
+        return;
+      }
+      // Multiple files: auto-detect each and route individually
+      const sameSlot: File[] = [];
+      for (const f of files) {
+        const detected = await detectFileType(f);
+        if (detected && detected !== which) {
+          // This file belongs elsewhere — route it there
+          showToast(`✓ ${f.name} → ${slotLabel(detected)}`, "success");
+          onDropFile(detected, f);
+        } else {
+          sameSlot.push(f);
+        }
+      }
+      // Files that match the target slot (or couldn't be detected)
+      if (sameSlot.length === 1) {
+        onDropFile(which, sameSlot[0]);
+      } else if (sameSlot.length > 1) {
+        // Bundle same-type files into a ZIP for batch processing
+        showToast(`Bundling ${sameSlot.length} ${slotLabel(which)} files into ZIP…`, "success");
+        const zipped = await bundleFilesAsZip(sameSlot);
+        onDropFile(which, zipped);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [onDropFile, showToast],
   );
 
@@ -416,17 +420,30 @@ export const StartPage: React.FC = () => {
         dragCounter.current--;
         if (dragCounter.current <= 0) { dragCounter.current = 0; setPageDrag(false); }
       }}
-      onDrop={(e) => {
+      onDrop={async (e) => {
         e.preventDefault();
         dragCounter.current = 0;
         setPageDrag(false);
-        // Handle single or multiple files dropped on the page
+        // Handle all dropped files — auto-detect and route each one
         const fileList = e.dataTransfer.files;
-        if (fileList.length === 1) {
-          onPageDrop(fileList[0]);
-        } else if (fileList.length > 1) {
-          // Multiple files dropped on page — try to auto-detect and route
-          onPageDrop(fileList[0]); // Route first file; user can multi-drop on slots
+        if (fileList.length === 0) return;
+        const routed: string[] = [];
+        const unrouted: string[] = [];
+        for (let i = 0; i < fileList.length; i++) {
+          const f = fileList[i];
+          const detected = await detectFileType(f);
+          if (detected) {
+            onDropFile(detected, f);
+            routed.push(`${f.name} → ${slotLabel(detected)}`);
+          } else {
+            unrouted.push(f.name);
+          }
+        }
+        if (routed.length > 0) {
+          showToast(`✓ Routed ${routed.length} file${routed.length > 1 ? "s" : ""}: ${routed.join(", ")}`, "success");
+        }
+        if (unrouted.length > 0) {
+          showToast(`Could not auto-detect: ${unrouted.join(", ")}. Drop on a specific slot.`, "warn");
         }
       }}
     >

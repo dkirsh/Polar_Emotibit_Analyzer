@@ -5,6 +5,7 @@ import { ResultsCoverPage } from "./pages/ResultsCoverPage";
 import { GroupPage } from "./pages/GroupPage";
 import { AnalyticDetailPage } from "./pages/AnalyticDetailPage";
 import { RoomSummaryPage } from "./pages/RoomSummaryPage";
+import { WorkflowWizard } from "./workflow/WorkflowWizard";
 
 export const App: React.FC = () => {
   return (
@@ -13,11 +14,13 @@ export const App: React.FC = () => {
         <h1>Polar-EmotiBit Analyzer</h1>
         <nav className="topbar-nav" aria-label="Global navigation">
           <Link to="/">New Analysis</Link>
+          <Link to="/workflow">Wizard</Link>
           <a href="/docs" target="_blank" rel="noreferrer">API docs</a>
         </nav>
       </header>
       <Routes>
         <Route path="/" element={<StartPage />} />
+        <Route path="/workflow" element={<WorkflowWizard />} />
         <Route path="/results/:sessionId" element={<ResultsCoverPage />} />
         <Route path="/results/:sessionId/room-summary" element={<RoomSummaryPage />} />
         <Route path="/results/:sessionId/group/:groupId" element={<GroupPage />} />

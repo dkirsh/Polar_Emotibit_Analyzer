@@ -52,6 +52,15 @@ class SessionDetail(BaseModel):
     order_affect: dict[str, Any] | None = None
     room_stats: list[dict[str, Any]] | None = None
     condition_aggregate: dict[str, Any] | None = None
+    # Direct Vernier respiration-belt results. Written by /analyze into the
+    # session store (see analysis_core.py); these fields must be declared here
+    # or Pydantic silently drops them when get_session does SessionDetail(**record),
+    # leaving a recorded belt computed-but-never-shown (the last-mile failure mode).
+    vernier: dict[str, Any] | None = None
+    respiratory_patterns: dict[str, Any] | None = None
+    # The researcher's chosen condition grouping (treatment/control/etc.) used
+    # to recompute respiratory_patterns. None until a grouping is applied.
+    respiratory_conditions: list[dict[str, Any]] | None = None
 
 
 class CsvTimestampRange(BaseModel):
@@ -317,3 +326,24 @@ class MarkerUpdateRequest(BaseModel):
     """Request payload for updating session markers dynamically."""
 
     markers: list[EventMarker]
+
+
+class RespiratoryCondition(BaseModel):
+    """One user-defined condition for respiratory pattern comparison.
+
+    `markers` are phase/marker labels (matching the per-cycle `phase`) that
+    belong to this condition. `role` decides how the condition participates:
+    'stress' and 'calm' define the dichotomy that drives pattern detection;
+    'comparison' conditions appear in the comparison table only.
+    """
+
+    name: str
+    markers: list[str]
+    role: str = "comparison"  # "stress" | "calm" | "comparison"
+
+
+class RespiratoryConditionsRequest(BaseModel):
+    """Request payload for recomputing respiratory patterns under a custom
+    condition grouping chosen by the researcher."""
+
+    conditions: list[RespiratoryCondition]

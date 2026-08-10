@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -441,18 +442,23 @@ def generate_pattern_figures(
     exemplars: dict[str, dict[str, Any]],
     patterns: dict[str, Any],
     fs: int = VERNIER_SAMPLE_RATE_HZ,
-) -> dict[str, bytes]:
+) -> tuple[dict[str, bytes], dict[str, str]]:
     """Generate PNG figures for each detected stress pattern.
 
-    Returns dict of pattern_name → PNG bytes.
+    Returns ``(figures, skipped)`` where ``figures`` maps pattern_name → PNG
+    bytes and ``skipped`` maps the name of any figure that could not be built to
+    a human-readable reason. Per RESP_VIZ_CONTRACT this function never raises:
+    each figure is attempted independently, so one bad figure cannot suppress
+    the others or take down the surrounding table/stat computation.
     """
+    skipped: dict[str, str] = {}
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
         log.warning("matplotlib not available; skipping pattern figure generation")
-        return {}
+        return {}, {"_all": "matplotlib not available"}
 
     CALM_COLOR = "#4CAF50"
     STRESS_COLOR = "#E53935"
@@ -482,7 +488,8 @@ def generate_pattern_figures(
     figures: dict[str, bytes] = {}
 
     for pname, ex_data in exemplars.items():
-        if ex_data.get("normal") is None:
+        if ex_data.get("normal") is None or ex_data.get("stressed") is None:
+            skipped[pname] = "no paired normal/stressed exemplar to contrast"
             continue
 
         normal = ex_data["normal"]
@@ -620,13 +627,20 @@ def generate_pattern_figures(
     # ── Combined overview figure ──
     found_patterns = [p for p in exemplars if patterns.get(p, {}).get("found")]
     if len(found_patterns) >= 2:
-        overview = _build_overview_figure(
-            resp_z, peaks, troughs, exemplars, patterns, found_patterns, fs
-        )
-        if overview:
-            figures["overview"] = overview
+        try:
+            overview = _build_overview_figure(
+                resp_z, peaks, troughs, exemplars, patterns, found_patterns, fs
+            )
+            if overview:
+                figures["overview"] = overview
+        except Exception as exc:  # noqa: BLE001 — viz must never raise
+            skipped["overview"] = str(exc)
+            try:
+                plt.close("all")
+            except Exception:  # noqa: BLE001
+                pass
 
-    return figures
+    return figures, skipped
 
 
 def _find_regular_sequence(
@@ -689,6 +703,14 @@ def _build_overview_figure(
     except ImportError:
         return None
 
+    # A pattern can be 'found' (has stressed breaths) yet lack a paired normal
+    # exemplar; such panels cannot be drawn and must be excluded rather than
+    # crashing the whole overview (RESP_VIZ_CONTRACT: viz never raises).
+    found_patterns = [
+        p for p in found_patterns
+        if exemplars.get(p, {}).get("normal") is not None
+        and exemplars.get(p, {}).get("stressed") is not None
+    ]
     n = len(found_patterns)
     if n == 0:
         return None
@@ -788,135 +810,51 @@ def compare_conditions(
 
 # ── Top-level entry point ───────────────────────────────────────────────────
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public entry points — thin wrappers over the modular respiratory pipeline
+# (app/services/processing/respiratory/). The heavy assembly that used to live
+# here was superseded by the staged pipeline (signal → tables → stats → viz)
+# so there is one assembly path, not two that drift. The pipeline is imported
+# lazily inside each wrapper to avoid an import cycle (the pipeline's stages
+# import the primitives defined above in this module).
+# ─────────────────────────────────────────────────────────────────────────────
+
 def analyze_respiratory_patterns(
     vernier_result: dict[str, Any],
     markers: list[dict[str, Any]] | None = None,
     condition_map: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
-    """Full respiratory stress pattern analysis.
+    """Full respiratory stress pattern analysis (delegates to the pipeline).
 
-    This is the main entry point called from the analysis route.
-
-    Args:
-        vernier_result: Dict from parse_and_analyze_vernier containing at
-            minimum 'respiratory_features' with 'per_breath' list, and
-            metadata with event_markers.
-        markers: Optional list of marker dicts for phase alignment.
-        condition_map: Optional condition→phases mapping for comparison.
-
-    Returns:
-        Dict with:
-          - patterns_detected: list of found pattern names
-          - pattern_counts: dict of pattern → count
-          - exemplars: per-pattern exemplar metadata
-          - figures: dict of pattern → base64 PNG (if matplotlib available)
-          - condition_comparison: cross-condition stats
-          - summary: human-readable summary string
+    `condition_map` (name→phases) is treated as comparison-only groupings;
+    stress/calm pattern detection uses the defaults, matching prior behaviour.
+    The returned dict carries `_recompute` (the source-of-truth inputs) for the
+    caller to persist.
     """
-    # Get the raw force signal and reprocess for z-score
-    resp_features = vernier_result.get("respiratory_features", {})
-    metadata = vernier_result.get("metadata", {})
+    from app.services.processing.respiratory import pipeline as _pipeline
 
-    # We need the raw timeseries to get the z-scored signal
-    # If the vernier_result came from parse_and_analyze_vernier, the caller
-    # should have stored the timeseries. We reconstruct from per_breath if needed.
-    n_samples = metadata.get("n_resampled", 0)
-    fs = metadata.get("sample_rate_hz", VERNIER_SAMPLE_RATE_HZ)
+    conditions = None
+    if condition_map:
+        conditions = [
+            {"name": k, "markers": v, "role": "comparison"}
+            for k, v in condition_map.items()
+        ]
+    res = _pipeline.run(vernier_result=vernier_result, markers=markers, conditions=conditions)
+    out = dict(res.result)
+    if res.recompute_payload is not None:
+        out["_recompute"] = res.recompute_payload
+    return out
 
-    # Reconstruct from the VernierParseResult if available
-    timeseries = vernier_result.get("_timeseries")
-    if timeseries is None:
-        log.warning("No raw timeseries in vernier_result; cannot generate pattern figures")
-        return {"error": "Raw timeseries not available for pattern analysis"}
 
-    force = timeseries["force"].values.astype(float)
+def recompute_respiratory_patterns(
+    recompute_payload: dict[str, Any],
+    conditions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Re-run pattern detection, figures, and comparison under a researcher-chosen
+    grouping (delegates to the pipeline; single assembly path)."""
+    from app.services.processing.respiratory import pipeline as _pipeline
 
-    # Compute z-scored signal
-    baseline = _baseline_als(force)
-    detrended = force - baseline
-    win = min(10 * fs, len(detrended) // 2)
-    if win < 10:
-        return {"error": "Recording too short for pattern analysis"}
-
-    vn_mean = uniform_filter1d(detrended, win)
-    vn_std = np.sqrt(uniform_filter1d((detrended - vn_mean) ** 2, win))
-    vn_std[vn_std < 1e-12] = 1e-12
-    resp_z = (detrended - vn_mean) / vn_std
-
-    # Peak/trough detection
-    peaks_list, troughs_list = _peakdetect_simple(resp_z, lookahead=1, delta=1.0)
-
-    if len(peaks_list) < 3 or len(troughs_list) < 3:
-        return {"error": "Insufficient peaks/troughs for pattern analysis"}
-
-    # Phase markers
-    event_markers = vernier_result.get("event_markers", [])
-    if not event_markers and markers:
-        # Convert biometric markers to elapsed-seconds format if needed
-        event_markers = markers
-
-    # Extract breath cycles
-    cycles_df = extract_breath_cycles(resp_z, peaks_list, troughs_list, fs, event_markers, detrended=detrended)
-    if len(cycles_df) == 0:
-        return {"error": "No valid breath cycles extracted"}
-
-    # Classify patterns
-    patterns = classify_stress_patterns(cycles_df)
-
-    # Find exemplars
-    exemplars = find_exemplars(cycles_df, patterns)
-
-    # Generate figures
-    figures_bytes = generate_pattern_figures(
-        resp_z, peaks_list, troughs_list, exemplars, patterns, fs
-    )
-
-    # Encode figures as base64 for JSON transport
-    figures_b64: dict[str, str] = {}
-    for name, png_bytes in figures_bytes.items():
-        figures_b64[name] = base64.b64encode(png_bytes).decode("ascii")
-
-    # Condition comparison
-    comparison = compare_conditions(cycles_df, condition_map)
-
-    # Build summary
-    detected = [p for p, d in patterns.items() if d.get("found")]
-    pattern_counts = {p: d["count"] for p, d in patterns.items() if d.get("found")}
-
-    summary_lines = [
-        f"Analyzed {len(cycles_df)} breath cycles across {cycles_df['phase'].nunique()} phases.",
-        f"Detected {len(detected)} of 7 stress patterns: {', '.join(detected) or 'none'}.",
-    ]
-    for p in detected:
-        pdata = patterns[p]
-        summary_lines.append(f"  • {pdata['label']}: {pdata['count']} stressed breaths")
-
-    return {
-        "patterns_detected": detected,
-        "pattern_counts": pattern_counts,
-        "pattern_details": {
-            p: {
-                "label": d["label"],
-                "description": d["description"],
-                "count": d["count"],
-                "calm_count": d["calm_count"],
-                "found": d["found"],
-            }
-            for p, d in patterns.items()
-        },
-        "exemplars": {
-            p: {
-                "normal": {k: v for k, v in ex["normal"].items()
-                           if k not in ("stressed_df", "calm_df")}
-                if ex.get("normal") else None,
-                "stressed": {k: v for k, v in ex["stressed"].items()
-                             if k not in ("stressed_df", "calm_df")},
-            }
-            for p, ex in exemplars.items()
-        },
-        "figures": figures_b64,
-        "n_figures": len(figures_b64),
-        "condition_comparison": comparison,
-        "total_breaths": len(cycles_df),
-        "summary": "\n".join(summary_lines),
-    }
+    res = _pipeline.run(recompute_payload=recompute_payload, conditions=conditions)
+    return res.result

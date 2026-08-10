@@ -891,3 +891,79 @@ a:hover { text-decoration: underline; }
 }
 .data-preview-table tr:nth-child(even) td { background: #16162a; }
 .data-preview-table tr:hover td { background: #1e1e3a; }
+
+/* ── Workflow wizard ───────────────────────────────────────────────── */
+.wz { display: grid; grid-template-columns: 220px 1fr; gap: 20px; padding: 18px; }
+.wz-rail ol { list-style: none; margin: 0; padding: 0; }
+.wz-step { display: flex; align-items: center; gap: 8px; padding: 8px 6px;
+  border-left: 3px solid transparent; color: var(--chart-sub); font-size: 14px; }
+.wz-step.active { border-left-color: #2C5F2D; color: var(--chart-text); }
+.wz-step.ok .wz-glyph { color: #2C5F2D; }
+.wz-step.needs_input .wz-glyph { color: #C9A227; }
+.wz-step.failed .wz-glyph { color: var(--chart-bad); }
+.wz-glyph { width: 16px; text-align: center; }
+.wz-step-label { flex: 1; }
+.wz-link { background: none; border: none; color: var(--chart-accent);
+  cursor: pointer; font-size: 12px; padding: 0; }
+.wz-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+.wz-input { flex: 1; padding: 7px 9px; background: var(--chart-bg);
+  border: 1px solid var(--chart-grid); color: var(--chart-text); border-radius: 4px; }
+.wz button { padding: 7px 14px; border: 1px solid var(--chart-grid);
+  background: var(--chart-bg); color: var(--chart-text); border-radius: 4px; cursor: pointer; }
+.wz button:disabled { opacity: 0.45; cursor: default; }
+.wz-primary { background: #2C5F2D !important; border-color: #2C5F2D !important; color: #fff !important; }
+.wz-done { color: #2C5F2D; font-weight: 600; }
+.wz-error { color: var(--chart-bad); padding: 8px; border: 1px solid var(--chart-bad); border-radius: 4px; }
+.wz-muted { color: var(--chart-sub); font-size: 13px; }
+.wz-section { margin-top: 20px; }
+.wz-decision { border: 1px solid var(--chart-grid); border-radius: 6px; padding: 14px; margin-bottom: 14px; }
+.wz-amber { border-color: #C9A227; }
+.wz-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.wz-measures { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0; }
+.wz-measures fieldset { border: 1px solid var(--chart-grid); border-radius: 4px; padding: 6px 10px; }
+.wz-check { display: block; font-size: 13px; }
+.wz-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+.wz-table th, .wz-table td { border-bottom: 1px solid var(--chart-grid); padding: 6px 8px; text-align: left; }
+.wz-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.wz-sig { color: #2C5F2D; font-weight: 700; }
+.wz-gallery { display: flex; gap: 16px; flex-wrap: wrap; }
+.wz-gallery img { max-width: 360px; border: 1px solid var(--chart-grid); border-radius: 4px; background: #fff; }
+.wz-gallery figcaption { font-size: 12px; color: var(--chart-sub); text-align: center; }
+.wz-manifest { margin-top: 22px; font-size: 13px; }
+.wz-manifest li { margin: 3px 0; }
+.wz-user { color: #C9A227; }
+.inspect-panel { margin: 6px 0; }
+.inspect-panel.empty { color: var(--chart-sub); font-size: 12px; }
+.inspect-axis { stroke: var(--chart-grid); stroke-width: 1; }
+.inspect-tick, .inspect-title, .inspect-wlabel { fill: var(--chart-sub); font-size: 10px; }
+.inspect-title { fill: var(--chart-text); font-weight: 600; }
+
+/* ── Info (ⓘ) button + popover ─────────────────────────────────────── */
+.info-wrap { position: relative; display: inline-flex; }
+.info-btn { background: none; border: none; color: var(--chart-accent);
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+.info-btn:hover { color: var(--chart-text); }
+.info-pop { position: absolute; top: 0; left: 26px; z-index: 50; width: 380px;
+  max-height: 70vh; overflow-y: auto; background: #FAFAF7; color: #1c1c1c;
+  border: 1px solid #cfcfca; border-radius: 8px; padding: 14px 16px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.28); text-align: left; }
+.info-title { margin: 0 0 6px; font-size: 14px; font-weight: 700; color: #2C5F2D; }
+.info-summary { margin: 0 0 8px; font-size: 13px; line-height: 1.5; }
+.info-more { background: none; border: none; color: var(--chart-accent);
+  cursor: pointer; font-size: 12px; padding: 0; }
+.info-detail { margin-top: 6px; }
+.info-section { margin: 10px 0; }
+.info-section h5 { margin: 0 0 4px; font-size: 12.5px; font-weight: 700; color: #36454F; }
+.info-section p { margin: 0 0 5px; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; }
+.info-refs { margin-top: 10px; border-top: 1px solid #ddd; padding-top: 8px; }
+.info-refs h5 { margin: 0 0 5px; font-size: 12px; font-weight: 700; color: #36454F; }
+.info-refs ul { margin: 0; padding-left: 16px; }
+.info-refs li { font-size: 11.5px; line-height: 1.45; margin-bottom: 6px; }
+.info-refs a { color: #2C5F2D; text-decoration: underline; }
+
+/* E / Explain glyph — the substantial stats/science narrative primitive */
+.explain-btn { font-family: Georgia, "Times New Roman", serif; font-style: italic;
+  font-weight: 700; font-size: 13px; width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid var(--chart-accent); color: var(--chart-accent);
+  display: inline-flex; align-items: center; justify-content: center; }
+.explain-btn:hover { background: var(--chart-accent); color: #fff; }

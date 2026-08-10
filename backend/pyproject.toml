@@ -18,6 +18,9 @@ dependencies = [
     "pandas>=2.1",
     "scipy>=1.11",
     "pydantic>=2.5",
+    # Respiration engine: vendored RespInPeace (_engine/) needs tgt for its
+    # interval tiers. See contracts/RESP_ENGINE_CONTRACT.
+    "tgt>=1.5",
     # HTTP surface
     "fastapi>=0.109",
     "uvicorn[standard]>=0.27",
